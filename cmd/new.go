@@ -34,6 +34,10 @@ var newCmd = &cobra.Command{
 		return errors.New("accepts either no args (interactive mode) or <template_name>@<version> <project_name>")
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := exec.LookPath("git"); err != nil {
+			return errors.New("git is required but was not found in PATH")
+		}
+
 		cfg, err := appconfig.Load()
 		if err != nil {
 			return fmt.Errorf("failed loading config: %w", err)
