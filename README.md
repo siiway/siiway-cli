@@ -145,6 +145,55 @@ Final command:
 bun add typescript --clean
 ```
 
+### Manage language versions
+
+```bash
+siiway version [language] <version> [-- options...]
+```
+
+List available language version configuration:
+
+```bash
+siiway version --list
+siiway version -l
+```
+
+Configuration path (same language-structured style):
+
+- `languages.<language>.version.backend`
+- `languages.<language>.version.use`
+
+Supported built-in backends:
+
+- `uv` (default template: `uv python pin {version}`)
+- `nvm` (default template: `nvm install {version} && nvm use {version}`)
+
+You can also provide a custom command template via `languages.<language>.version.use`.
+
+Version placeholders:
+
+- `{version}`
+- `{options}`
+
+Example config:
+
+```yaml
+language: node
+languages:
+  python:
+    version:
+      backend: uv
+  node:
+    version:
+      backend: nvm
+```
+
+Example:
+
+```bash
+siiway version 20
+```
+
 With template replacement values:
 
 ```bash

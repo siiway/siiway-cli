@@ -145,6 +145,55 @@ languages:
 bun add typescript --clean
 ```
 
+### 管理语言版本
+
+```bash
+siiway version [language] <version> [-- options...]
+```
+
+查看可用的语言版本配置：
+
+```bash
+siiway version --list
+siiway version -l
+```
+
+配置路径（与 language 相同的分层方式）：
+
+- `languages.<language>.version.backend`
+- `languages.<language>.version.use`
+
+内置后端：
+
+- `uv`（默认模板：`uv python pin {version}`）
+- `nvm`（默认模板：`nvm install {version} && nvm use {version}`）
+
+也可通过 `languages.<language>.version.use` 自定义命令模板。
+
+版本占位符：
+
+- `{version}`
+- `{options}`
+
+示例配置：
+
+```yaml
+language: node
+languages:
+  python:
+    version:
+      backend: uv
+  node:
+    version:
+      backend: nvm
+```
+
+示例：
+
+```bash
+siiway version 20
+```
+
 带模板替换参数：
 
 ```bash

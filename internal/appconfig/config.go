@@ -26,7 +26,13 @@ type Config struct {
 }
 
 type LanguageConfig struct {
-	Run map[string]string `json:"run" yaml:"run"`
+	Run     map[string]string     `json:"run" yaml:"run"`
+	Version LanguageVersionConfig `json:"version" yaml:"version"`
+}
+
+type LanguageVersionConfig struct {
+	Backend string `json:"backend" yaml:"backend"`
+	Use     string `json:"use" yaml:"use"`
 }
 
 // RegistryConfig points to a GitHub repository that contains templates metadata.
@@ -183,6 +189,8 @@ func (c *Config) applyDefaults() {
 			normalizedRun[normalizedAction] = normalizedCommand
 		}
 		langCfg.Run = normalizedRun
+		langCfg.Version.Backend = strings.ToLower(strings.TrimSpace(langCfg.Version.Backend))
+		langCfg.Version.Use = strings.TrimSpace(langCfg.Version.Use)
 
 		if normalizedLang != lang {
 			delete(c.Languages, lang)

@@ -5,12 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/SiiWay/siiway-cli/internal/appconfig"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 func init() {
@@ -47,30 +45,20 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("no languages.run configuration found in global config or .siiway.yaml")
 		}
 
-		preferredLanguage := strings.ToLower(strings.TrimSpace(projectCfg.Language))
-		if preferredLanguage != "" {
-			if _, ok := languages[preferredLanguage]; !ok {
-				return fmt.Errorf("language %q configured in .siiway.yaml is not defined in languages", preferredLanguage)
-			}
-		}
-
 		if listMode {
 			if len(remainingArgs) > 0 {
 				return fmt.Errorf("--list (-l) does not accept action or arguments")
 			}
-			printAvailableRunActions(cwd, preferredLanguage, languages)
+			printAvailableRunActions(cwd, projectCfg.Language, languages)
 			return nil
 		}
 		if len(remainingArgs) == 0 {
 			return fmt.Errorf("action is required")
 		}
 
-		lang := preferredLanguage
-		if lang == "" {
-			lang, err = detectProjectLanguage(cwd, languages)
-			if err != nil {
-				return err
-			}
+		lang, err := resolveLanguage(cwd, projectCfg.Language, languages)
+		if err != nil {
+			return err
 		}
 
 		action := strings.ToLower(strings.TrimSpace(remainingArgs[0]))
@@ -80,7 +68,7 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("run action not found for language %q: %s (available: %s)", lang, action, strings.Join(sortedKeys(runMap), ", "))
 		}
 
-		arguments, options := splitRunArgsAndOptions(remainingArgs[1:])
+		arguments, options := splitArgsAndOptions(remainingArgs[1:])
 		rendered := renderRunCommand(commandTemplate, arguments, options)
 		if strings.TrimSpace(rendered) == "" {
 			return fmt.Errorf("resolved command is empty for language %q action %q", lang, action)
@@ -124,6 +112,11 @@ func parseRunInvocation(args []string) (bool, []string, error) {
 
 func printAvailableRunActions(cwd, preferredLanguage string, languages map[string]appconfig.LanguageConfig) {
 	if preferredLanguage != "" {
+		preferredLanguage = strings.ToLower(strings.TrimSpace(preferredLanguage))
+		if _, ok := languages[preferredLanguage]; !ok {
+			fmt.Printf("Configured language %q was not found in languages\n", preferredLanguage)
+			return
+		}
 		runMap := languages[preferredLanguage].Run
 		fmt.Printf("Configured language: %s\n", preferredLanguage)
 		fmt.Println("Available run actions:")
@@ -154,108 +147,6 @@ func printAvailableRunActions(cwd, preferredLanguage string, languages map[strin
 	}
 }
 
-type projectConfig struct {
-	Language  string                              `yaml:"language"`
-	Languages map[string]appconfig.LanguageConfig `yaml:"languages"`
-}
-
-func loadProjectConfig(path string) (projectConfig, error) {
-	cfg := projectConfig{Languages: map[string]appconfig.LanguageConfig{}}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
-		return cfg, fmt.Errorf("failed reading %s: %w", path, err)
-	}
-
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return cfg, fmt.Errorf("failed parsing %s: %w", path, err)
-	}
-
-	cfg.Languages = normalizeLanguages(cfg.Languages)
-	return cfg, nil
-}
-
-func normalizeLanguages(in map[string]appconfig.LanguageConfig) map[string]appconfig.LanguageConfig {
-	out := map[string]appconfig.LanguageConfig{}
-	for lang, langCfg := range in {
-		normalizedLang := strings.ToLower(strings.TrimSpace(lang))
-		if normalizedLang == "" {
-			continue
-		}
-
-		runMap := map[string]string{}
-		for action, command := range langCfg.Run {
-			normalizedAction := strings.ToLower(strings.TrimSpace(action))
-			normalizedCommand := strings.TrimSpace(command)
-			if normalizedAction == "" || normalizedCommand == "" {
-				continue
-			}
-			runMap[normalizedAction] = normalizedCommand
-		}
-
-		out[normalizedLang] = appconfig.LanguageConfig{Run: runMap}
-	}
-	return out
-}
-
-func mergeLanguages(global, project map[string]appconfig.LanguageConfig) map[string]appconfig.LanguageConfig {
-	merged := map[string]appconfig.LanguageConfig{}
-
-	for lang, langCfg := range normalizeLanguages(global) {
-		copiedRun := map[string]string{}
-		for action, command := range langCfg.Run {
-			copiedRun[action] = command
-		}
-		merged[lang] = appconfig.LanguageConfig{Run: copiedRun}
-	}
-
-	for lang, langCfg := range normalizeLanguages(project) {
-		base := merged[lang]
-		if base.Run == nil {
-			base.Run = map[string]string{}
-		}
-		for action, command := range langCfg.Run {
-			base.Run[action] = command
-		}
-		merged[lang] = base
-	}
-
-	return merged
-}
-
-func detectProjectLanguage(cwd string, languages map[string]appconfig.LanguageConfig) (string, error) {
-	if _, ok := languages["python"]; ok {
-		if fileExists(filepath.Join(cwd, "pyproject.toml")) || fileExists(filepath.Join(cwd, "requirements.txt")) || fileExists(filepath.Join(cwd, "setup.py")) {
-			return "python", nil
-		}
-	}
-
-	if _, ok := languages["node"]; ok {
-		if fileExists(filepath.Join(cwd, "package.json")) || fileExists(filepath.Join(cwd, "bun.lockb")) || fileExists(filepath.Join(cwd, "pnpm-lock.yaml")) || fileExists(filepath.Join(cwd, "yarn.lock")) {
-			return "node", nil
-		}
-	}
-
-	if len(languages) == 1 {
-		for lang := range languages {
-			return lang, nil
-		}
-	}
-
-	return "", fmt.Errorf("unable to detect project language in %s (configured languages: %s)", cwd, strings.Join(sortedKeysLang(languages), ", "))
-}
-
-func splitRunArgsAndOptions(tokens []string) ([]string, []string) {
-	for i, token := range tokens {
-		if token == "--" {
-			return tokens[:i], tokens[i+1:]
-		}
-	}
-	return tokens, nil
-}
-
 func renderRunCommand(template string, arguments, options []string) string {
 	argsValue := joinShellEscaped(arguments)
 	optionsValue := joinShellEscaped(options)
@@ -282,48 +173,4 @@ func renderRunCommand(template string, arguments, options []string) string {
 	}
 
 	return strings.TrimSpace(replaced)
-}
-
-func joinShellEscaped(parts []string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	escaped := make([]string, 0, len(parts))
-	for _, part := range parts {
-		escaped = append(escaped, shellQuote(part))
-	}
-	return strings.Join(escaped, " ")
-}
-
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return !info.IsDir()
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedKeysLang(m map[string]appconfig.LanguageConfig) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
