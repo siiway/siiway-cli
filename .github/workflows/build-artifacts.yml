@@ -31,12 +31,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -69,7 +69,7 @@ jobs:
             .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bin/siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}*
