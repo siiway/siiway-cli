@@ -18,9 +18,11 @@ import (
 )
 
 var githubToken string
+var forceOverwrite bool
 
 func init() {
 	newCmd.Flags().StringVar(&githubToken, "token", "", "GitHub token for private repositories and higher API rate limits")
+	newCmd.Flags().BoolVarP(&forceOverwrite, "force", "f", false, "Overwrite existing target directory")
 	rootCmd.AddCommand(newCmd)
 }
 
@@ -72,8 +74,9 @@ var newCmd = &cobra.Command{
 		var selected registry.Template
 		var version string
 		var projectName string
+		isTUIMode := len(args) == 0
 
-		if len(args) == 0 {
+		if isTUIMode {
 			if !isInteractive() {
 				return errors.New("non-interactive terminal detected; please use: siiway new <template_name>@<version> <project_name>")
 			}
@@ -107,6 +110,9 @@ var newCmd = &cobra.Command{
 
 		targetDir := filepath.Clean(finalProjectName)
 		if err := validateTargetDir(targetDir); err != nil {
+			return err
+		}
+		if err := handleExistingTargetDir(targetDir, isTUIMode, forceOverwrite); err != nil {
 			return err
 		}
 
@@ -364,11 +370,49 @@ func validateTargetDir(targetDir string) error {
 	if strings.TrimSpace(targetDir) == "" || targetDir == "." {
 		return errors.New("target directory cannot be empty")
 	}
-	if _, err := os.Stat(targetDir); err == nil {
-		return fmt.Errorf("target directory already exists: %s", targetDir)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	return nil
+}
+
+func handleExistingTargetDir(targetDir string, isTUIMode, force bool) error {
+	info, err := os.Stat(targetDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return fmt.Errorf("failed checking target directory: %w", err)
 	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("target path exists and is not a directory: %s", targetDir)
+	}
+
+	shouldOverwrite := force
+	if isTUIMode {
+		confirm := promptui.Select{
+			Label: fmt.Sprintf("Target directory %q already exists. Overwrite?", targetDir),
+			Items: []string{"Yes", "No"},
+			Size:  2,
+		}
+
+		idx, _, promptErr := confirm.Run()
+		if promptErr != nil {
+			return fmt.Errorf("overwrite confirmation cancelled: %w", promptErr)
+		}
+		if idx != 0 {
+			return errors.New("operation cancelled")
+		}
+
+		shouldOverwrite = true
+	}
+
+	if !shouldOverwrite {
+		return fmt.Errorf("target directory already exists: %s\nrerun with --force (-f) to overwrite the existing directory", targetDir)
+	}
+
+	if err := os.RemoveAll(targetDir); err != nil {
+		return fmt.Errorf("failed removing existing target directory: %w", err)
+	}
+
 	return nil
 }
 
