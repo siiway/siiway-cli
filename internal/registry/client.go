@@ -24,6 +24,7 @@ const (
 	registryOwner = "siiway"
 	registryRepo  = "cli-templates"
 	registryRef   = "main"
+	registryPath  = "templates.yaml"
 )
 
 var metadataFileCandidates = []string{
@@ -33,12 +34,60 @@ var metadataFileCandidates = []string{
 
 // SourcePath returns the primary GitHub Contents API endpoint for registry metadata.
 func SourcePath() string {
+	return SourcePathFor(DefaultSource())
+}
+
+// Source describes a GitHub repository location for templates metadata.
+type Source struct {
+	Owner string
+	Repo  string
+	Ref   string
+	Path  string
+}
+
+// DefaultSource returns the built-in registry source configuration.
+func DefaultSource() Source {
+	return Source{
+		Owner: registryOwner,
+		Repo:  registryRepo,
+		Ref:   registryRef,
+		Path:  registryPath,
+	}
+}
+
+func normalizeSource(source Source) Source {
+	normalized := source
+	normalized.Owner = strings.TrimSpace(normalized.Owner)
+	normalized.Repo = strings.TrimSpace(normalized.Repo)
+	normalized.Ref = strings.TrimSpace(normalized.Ref)
+	normalized.Path = strings.Trim(strings.TrimSpace(normalized.Path), "/")
+
+	defaults := DefaultSource()
+	if normalized.Owner == "" {
+		normalized.Owner = defaults.Owner
+	}
+	if normalized.Repo == "" {
+		normalized.Repo = defaults.Repo
+	}
+	if normalized.Ref == "" {
+		normalized.Ref = defaults.Ref
+	}
+	if normalized.Path == "" {
+		normalized.Path = defaults.Path
+	}
+
+	return normalized
+}
+
+// SourcePathFor builds the GitHub Contents API URL for the given source.
+func SourcePathFor(source Source) string {
+	s := normalizeSource(source)
 	return fmt.Sprintf(
 		"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
-		registryOwner,
-		registryRepo,
-		"templates.yaml",
-		registryRef,
+		s.Owner,
+		s.Repo,
+		s.Path,
+		s.Ref,
 	)
 }
 
@@ -53,6 +102,7 @@ type githubContentResp struct {
 type Client struct {
 	httpClient *http.Client
 	token      string
+	source     Source
 }
 
 // Template represents a project template with metadata about
@@ -71,10 +121,21 @@ type Template struct {
 // NewClient creates and returns a new registry client
 // with a default HTTP timeout of 12 seconds.
 func NewClient(token string) *Client {
+	return NewClientWithSource(token, DefaultSource())
+}
+
+// NewClientWithSource creates a new registry client for the provided source.
+func NewClientWithSource(token string, source Source) *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: 12 * time.Second},
 		token:      strings.TrimSpace(token),
+		source:     normalizeSource(source),
 	}
+}
+
+// SourcePath returns the primary metadata URL for this client's registry source.
+func (c *Client) SourcePath() string {
+	return SourcePathFor(c.source)
 }
 
 // FetchTemplates retrieves the list of available templates from the registry.
@@ -111,7 +172,7 @@ func (c *Client) FetchTemplates(ctx context.Context) ([]Template, error) {
 }
 
 func (c *Client) fetchFromFixedContentsAPI(ctx context.Context) ([]Template, error) {
-	apiURL := SourcePath()
+	apiURL := c.SourcePath()
 	body, status, err := c.fetch(ctx, apiURL)
 	if err != nil {
 		return nil, err
@@ -128,7 +189,7 @@ func (c *Client) fetchFromFixedContentsAPI(ctx context.Context) ([]Template, err
 		return nil, fmt.Errorf("failed parsing github contents response: %w", err)
 	}
 	if content.Type != "file" || strings.ToLower(content.Encoding) != "base64" {
-		return nil, errors.New("unexpected github contents response for templates.yaml")
+		return nil, fmt.Errorf("unexpected github contents response for %s", c.source.Path)
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(content.Content, "\n", ""))
@@ -136,9 +197,9 @@ func (c *Client) fetchFromFixedContentsAPI(ctx context.Context) ([]Template, err
 		return nil, fmt.Errorf("failed base64 decoding metadata content: %w", err)
 	}
 
-	templates, err := parseTemplates(decoded, "templates.yaml")
+	templates, err := parseTemplates(decoded, c.source.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed parsing templates.yaml: %w", err)
+		return nil, fmt.Errorf("failed parsing %s: %w", c.source.Path, err)
 	}
 	normalized := normalizeTemplates(templates)
 	if len(normalized) == 0 {
@@ -149,14 +210,14 @@ func (c *Client) fetchFromFixedContentsAPI(ctx context.Context) ([]Template, err
 }
 
 func (c *Client) fetchFromContentsAPI(ctx context.Context) ([]Template, error) {
-	branches := []string{registryRef, "main", "master"}
+	branches := []string{c.source.Ref, "main", "master"}
 
 	for _, branch := range branches {
-		for _, fileName := range fileCandidatesForBranch(branch) {
+		for _, fileName := range fileCandidatesForBranch(c.source, branch) {
 			apiURL := fmt.Sprintf(
 				"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
-				registryOwner,
-				registryRepo,
+				c.source.Owner,
+				c.source.Repo,
 				fileName,
 				branch,
 			)
@@ -199,11 +260,31 @@ func (c *Client) fetchFromContentsAPI(ctx context.Context) ([]Template, error) {
 	return nil, errors.New("unable to fetch parseable metadata from github contents api")
 }
 
-func fileCandidatesForBranch(branch string) []string {
-	if branch == registryRef {
-		return []string{"templates.yaml", "registry/templates.yaml"}
+func fileCandidatesForBranch(source Source, branch string) []string {
+	preferredPath := strings.Trim(strings.TrimSpace(source.Path), "/")
+	if preferredPath == "" {
+		preferredPath = registryPath
 	}
-	return metadataFileCandidates
+
+	candidates := []string{preferredPath}
+	defaultSource := DefaultSource()
+	if branch == defaultSource.Ref {
+		candidates = append(candidates, "templates.yaml", "registry/templates.yaml")
+	} else {
+		candidates = append(candidates, metadataFileCandidates...)
+	}
+
+	seen := map[string]struct{}{}
+	uniq := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		uniq = append(uniq, c)
+	}
+
+	return uniq
 }
 
 func (c *Client) fetchFromGitClone(ctx context.Context) ([]Template, error) {
@@ -212,10 +293,10 @@ func (c *Client) fetchFromGitClone(ctx context.Context) ([]Template, error) {
 	}
 
 	cloneURLs := []string{
-		"https://github.com/siiway/cli-templates.git",
+		fmt.Sprintf("https://github.com/%s/%s.git", c.source.Owner, c.source.Repo),
 	}
 	if c.token == "" {
-		cloneURLs = append([]string{"git@github.com:siiway/cli-templates.git"}, cloneURLs...)
+		cloneURLs = append([]string{fmt.Sprintf("git@github.com:%s/%s.git", c.source.Owner, c.source.Repo)}, cloneURLs...)
 	}
 
 	var cloneErrs []string
@@ -310,7 +391,7 @@ func parseMetadataFromDir(root string) ([]Template, error) {
 }
 
 func (c *Client) fetchFromTree(ctx context.Context) ([]Template, error) {
-	branches := []string{registryRef, "main", "master"}
+	branches := []string{c.source.Ref, "main", "master"}
 	pathMatcher := regexp.MustCompile(`(?i)(template|registry|metadata).+\.(json|ya?ml)$`)
 
 	type treeNode struct {
@@ -327,7 +408,7 @@ func (c *Client) fetchFromTree(ctx context.Context) ([]Template, error) {
 	}
 
 	for _, branch := range branches {
-		apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1", registryOwner, registryRepo, branch)
+		apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1", c.source.Owner, c.source.Repo, branch)
 		body, status, err := c.fetch(ctx, apiURL)
 		if err != nil {
 			return nil, err
@@ -351,8 +432,8 @@ func (c *Client) fetchFromTree(ctx context.Context) ([]Template, error) {
 
 			blobURL := fmt.Sprintf(
 				"https://api.github.com/repos/%s/%s/git/blobs/%s",
-				registryOwner,
-				registryRepo,
+				c.source.Owner,
+				c.source.Repo,
 				node.SHA,
 			)
 

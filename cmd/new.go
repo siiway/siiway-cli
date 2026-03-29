@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/SiiWay/siiway-cli/internal/appconfig"
 	"github.com/SiiWay/siiway-cli/internal/registry"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
@@ -31,15 +32,32 @@ var newCmd = &cobra.Command{
 		return errors.New("accepts either no args (interactive mode) or <template_name>@<version> <project_name>")
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := appconfig.Load()
+		if err != nil {
+			return fmt.Errorf("failed loading config: %w", err)
+		}
+
 		token := strings.TrimSpace(githubToken)
 		if token == "" {
 			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 		}
+		if token == "" {
+			token = strings.TrimSpace(cfg.GitHubToken)
+		}
 
-		client := registry.NewClient(token)
+		activeReg := cfg.ActiveRegistry()
+
+		source := registry.Source{
+			Owner: activeReg.Owner,
+			Repo:  activeReg.Repo,
+			Ref:   activeReg.Ref,
+			Path:  activeReg.Path,
+		}
+
+		client := registry.NewClientWithSource(token, source)
 		templates, err := client.FetchTemplates(cmd.Context())
 		if err != nil {
-			return fmt.Errorf("failed to fetch template metadata from %s: %w", registry.SourcePath(), err)
+			return fmt.Errorf("failed to fetch template metadata from %s: %w", client.SourcePath(), err)
 		}
 		if len(templates) == 0 {
 			return errors.New("no templates found in registry")

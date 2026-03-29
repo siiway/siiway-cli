@@ -40,6 +40,6 @@ mkdir -p "$OUTPUT_DIR"
 
 # Build for current platform
 echo "Building for current platform..."
-CGO_ENABLED=0 go build   -ldflags="-X 'github.com/SiiWay/siiway-cli/cmd.Version=$VERSION' -X 'github.com/SiiWay/siiway-cli/cmd.BuildTime=$BUILD_TIME' -X 'github.com/SiiWay/siiway-cli/cmd.GitCommit=$GIT_COMMIT'"   -o "$OUTPUT_DIR/siiway-cli"   .
+CGO_ENABLED=0 go build   -ldflags="-s -w -X 'github.com/SiiWay/siiway-cli/cmd.Version=$VERSION' -X 'github.com/SiiWay/siiway-cli/cmd.BuildTime=$BUILD_TIME' -X 'github.com/SiiWay/siiway-cli/cmd.GitCommit=$GIT_COMMIT'"   -o "$OUTPUT_DIR/siiway-cli"   .
 
 echo "Build complete: $OUTPUT_DIR/siiway-cli"

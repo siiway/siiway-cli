@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -64,12 +64,12 @@ jobs:
           fi
 
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
-            -ldflags="-X 'github.com/SiiWay/siiway-cli/cmd.Version=${{ steps.meta.outputs.version }}' -X 'github.com/SiiWay/siiway-cli/cmd.BuildTime=${{ steps.meta.outputs.build_time }}' -X 'github.com/SiiWay/siiway-cli/cmd.GitCommit=${{ steps.meta.outputs.git_commit }}'" \
+            -ldflags="-s -w -X 'github.com/SiiWay/siiway-cli/cmd.Version=${{ steps.meta.outputs.version }}' -X 'github.com/SiiWay/siiway-cli/cmd.BuildTime=${{ steps.meta.outputs.build_time }}' -X 'github.com/SiiWay/siiway-cli/cmd.GitCommit=${{ steps.meta.outputs.git_commit }}'" \
             -o "bin/${OUTPUT_NAME}" \
             .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bin/siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}*

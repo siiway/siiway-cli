@@ -58,7 +58,7 @@ for platform in $(echo "$PLATFORMS" | tr "," " "); do
   fi
 
   echo "Building for $GOOS/$GOARCH..."
-  CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build     -ldflags="-X 'github.com/SiiWay/siiway-cli/cmd.Version=$VERSION' -X 'github.com/SiiWay/siiway-cli/cmd.BuildTime=$BUILD_TIME' -X 'github.com/SiiWay/siiway-cli/cmd.GitCommit=$GIT_COMMIT'"     -o "$OUTPUT_DIR/$OUTPUT_NAME"     .
+  CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build     -ldflags="-s -w -X 'github.com/SiiWay/siiway-cli/cmd.Version=$VERSION' -X 'github.com/SiiWay/siiway-cli/cmd.BuildTime=$BUILD_TIME' -X 'github.com/SiiWay/siiway-cli/cmd.GitCommit=$GIT_COMMIT'"     -o "$OUTPUT_DIR/$OUTPUT_NAME"     .
 done
 
 echo "Build complete! Binaries are in $OUTPUT_DIR"
