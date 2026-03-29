@@ -14,19 +14,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var templateName string
 var githubToken string
 
 func init() {
-	newCmd.Flags().StringVarP(&templateName, "template", "t", "", "Template name to use")
 	newCmd.Flags().StringVar(&githubToken, "token", "", "GitHub token for private repositories and higher API rate limits")
 	rootCmd.AddCommand(newCmd)
 }
 
 var newCmd = &cobra.Command{
-	Use:   "new [project-name]",
+	Use:   "new <template_name>@<version> <project_name>",
 	Short: "Create a new project from a template",
-	Args:  cobra.MaximumNArgs(1),
+	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		token := strings.TrimSpace(githubToken)
 		if token == "" {
@@ -42,17 +40,33 @@ var newCmd = &cobra.Command{
 			return errors.New("no templates found in registry")
 		}
 
-		projectName := ""
-		if len(args) == 1 {
-			projectName = strings.TrimSpace(args[0])
+		templateName, version, err := parseTemplateSpecifier(args[0])
+		if err != nil {
+			return err
 		}
+		projectName := strings.TrimSpace(args[1])
 
-		selected, finalProjectName, err := runNewWizard(templates, projectName)
+		selected, err := findTemplateByName(templates, templateName)
 		if err != nil {
 			return err
 		}
 
+		resolvedBranch, err := resolveTemplateBranch(selected.RepoURL, version, token)
+		if err != nil {
+			return err
+		}
+		selected.Branch = resolvedBranch
+
+		finalProjectName := projectName
+
 		targetDir := filepath.Clean(finalProjectName)
+		if err := validateTargetDir(targetDir); err != nil {
+			return err
+		}
+
+		if err := confirmCreation(selected, finalProjectName, targetDir); err != nil {
+			return err
+		}
 
 		if err := cloneTemplate(selected, targetDir, token); err != nil {
 			return err
@@ -64,27 +78,113 @@ var newCmd = &cobra.Command{
 	},
 }
 
-func runNewWizard(templates []registry.Template, projectName string) (registry.Template, string, error) {
-	selected, err := chooseTemplateTUI(templates, templateName)
+func parseTemplateSpecifier(spec string) (string, string, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return "", "", errors.New("template specifier is required: <template_name>@<version>")
+	}
+
+	parts := strings.SplitN(spec, "@", 2)
+	if len(parts) != 2 {
+		return "", "", errors.New("invalid template specifier, expected <template_name>@<version>")
+	}
+
+	templateName := strings.TrimSpace(parts[0])
+	version := strings.TrimSpace(parts[1])
+	if templateName == "" || version == "" {
+		return "", "", errors.New("invalid template specifier, template name and version are required")
+	}
+
+	return templateName, version, nil
+}
+
+func findTemplateByName(templates []registry.Template, templateName string) (registry.Template, error) {
+	for _, t := range templates {
+		if strings.EqualFold(strings.TrimSpace(t.Name), strings.TrimSpace(templateName)) {
+			return t, nil
+		}
+	}
+	return registry.Template{}, fmt.Errorf("template not found: %s", templateName)
+}
+
+func resolveTemplateBranch(repoURL, version, token string) (string, error) {
+	v := strings.TrimSpace(version)
+	if strings.EqualFold(v, "latest") {
+		return "main", nil
+	}
+
+	if strings.HasPrefix(strings.ToLower(v), "v") {
+		branches, err := listRemoteBranches(repoURL, token)
+		if err != nil {
+			return "", fmt.Errorf("failed resolving version %q to branch: %w", v, err)
+		}
+
+		if matched := matchVersionBranch(v, branches); matched != "" {
+			return matched, nil
+		}
+
+		return "", fmt.Errorf("no matching branch found for version %q in %s", v, repoURL)
+	}
+
+	return v, nil
+}
+
+func listRemoteBranches(repoURL, token string) ([]string, error) {
+	args := []string{}
+	if strings.TrimSpace(token) != "" && strings.HasPrefix(strings.ToLower(repoURL), "https://") {
+		credential := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+		args = append(args, "-c", "http.extraHeader=AUTHORIZATION: basic "+credential)
+	}
+	args = append(args, "ls-remote", "--heads", repoURL)
+
+	cmd := exec.Command("git", args...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return registry.Template{}, "", err
+		return nil, fmt.Errorf("git ls-remote failed: %s", strings.TrimSpace(string(out)))
 	}
 
-	finalProjectName, err := chooseProjectName(projectName, selected.Name)
-	if err != nil {
-		return registry.Template{}, "", err
+	branches := make([]string, 0)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		const prefix = "refs/heads/"
+		if strings.HasPrefix(fields[1], prefix) {
+			branches = append(branches, strings.TrimPrefix(fields[1], prefix))
+		}
 	}
 
-	targetDir := filepath.Clean(finalProjectName)
-	if err := validateTargetDir(targetDir); err != nil {
-		return registry.Template{}, "", err
+	return branches, nil
+}
+
+func matchVersionBranch(version string, branches []string) string {
+	base := strings.TrimPrefix(version, "v")
+	candidates := []string{
+		version,
+		base,
+		"release/" + version,
+		"release/" + base,
+		"releases/" + version,
+		"releases/" + base,
+		"release-" + version,
+		"release-" + base,
 	}
 
-	if err := confirmCreation(selected, finalProjectName, targetDir); err != nil {
-		return registry.Template{}, "", err
+	for _, candidate := range candidates {
+		for _, branch := range branches {
+			if branch == candidate {
+				return branch
+			}
+		}
 	}
 
-	return selected, finalProjectName, nil
+	return ""
 }
 
 func isInteractive() bool {
@@ -93,84 +193,6 @@ func isInteractive() bool {
 		return false
 	}
 	return info.Mode()&os.ModeCharDevice != 0
-}
-
-func chooseTemplateTUI(templates []registry.Template, chosen string) (registry.Template, error) {
-	if chosen != "" {
-		for _, t := range templates {
-			if strings.EqualFold(t.Name, chosen) {
-				fmt.Printf("Selected template: %s\n", t.Name)
-				return t, nil
-			}
-		}
-		return registry.Template{}, fmt.Errorf("template not found: %s", chosen)
-	}
-
-	if !isInteractive() {
-		return registry.Template{}, errors.New("non-interactive terminal detected; please use --template")
-	}
-
-	selectPrompt := promptui.Select{
-		Label: "Step 1/3: Select a template",
-		Items: templates,
-		Size:  12,
-		Templates: &promptui.SelectTemplates{
-			Label:    "{{ . }}",
-			Active:   "▸ {{ .Name | cyan }} - {{ .Description | faint }}",
-			Inactive: "  {{ .Name }} - {{ .Description }}",
-			Selected: "Selected: {{ .Name | green }}",
-		},
-		Searcher: func(input string, index int) bool {
-			item := templates[index]
-			q := strings.ToLower(strings.TrimSpace(input))
-			return strings.Contains(strings.ToLower(item.Name), q) || strings.Contains(strings.ToLower(item.Description), q)
-		},
-	}
-
-	idx, _, err := selectPrompt.Run()
-	if err != nil {
-		return registry.Template{}, fmt.Errorf("template selection cancelled: %w", err)
-	}
-
-	return templates[idx], nil
-}
-
-func chooseProjectName(current string, templateName string) (string, error) {
-	projectName := strings.TrimSpace(current)
-	if projectName != "" {
-		return projectName, nil
-	}
-
-	if !isInteractive() {
-		return "", errors.New("project name is required in non-interactive mode")
-	}
-
-	defaultName := strings.TrimSpace(templateName)
-	if defaultName == "" {
-		defaultName = "my-project"
-	}
-
-	prompt := promptui.Prompt{
-		Label:   "Step 2/3: Project name",
-		Default: defaultName,
-		Validate: func(input string) error {
-			name := strings.TrimSpace(input)
-			if name == "" {
-				return errors.New("project name cannot be empty")
-			}
-			if err := validateTargetDir(filepath.Clean(name)); err != nil {
-				return err
-			}
-			return nil
-		},
-	}
-
-	name, err := prompt.Run()
-	if err != nil {
-		return "", fmt.Errorf("project name input cancelled: %w", err)
-	}
-
-	return strings.TrimSpace(name), nil
 }
 
 func confirmCreation(t registry.Template, projectName, targetDir string) error {
