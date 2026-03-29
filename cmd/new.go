@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/SiiWay/siiway-cli/internal/appconfig"
@@ -108,7 +110,7 @@ var newCmd = &cobra.Command{
 			return err
 		}
 
-		if err := cloneTemplate(selected, targetDir, token); err != nil {
+		if err := cloneTemplate(selected, targetDir, finalProjectName, token); err != nil {
 			return err
 		}
 
@@ -366,7 +368,7 @@ func validateTargetDir(targetDir string) error {
 	return nil
 }
 
-func cloneTemplate(t registry.Template, targetDir string, token string) error {
+func cloneTemplate(t registry.Template, targetDir, projectName, token string) error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return errors.New("git is required but not found in PATH")
 	}
@@ -404,6 +406,10 @@ func cloneTemplate(t registry.Template, targetDir string, token string) error {
 		if err := moveSparsePathToRoot(targetDir, templatePath); err != nil {
 			return err
 		}
+	}
+
+	if err := applyProjectNameRegexRules(targetDir, projectName, t.ProjectNameRegexRules); err != nil {
+		return err
 	}
 
 	// Remove source history to turn cloned template into a fresh project.
@@ -488,4 +494,93 @@ func normalizeTemplatePath(p string) string {
 		return ""
 	}
 	return p
+}
+
+func applyProjectNameRegexRules(targetDir, projectName string, rules []registry.ProjectNameRegexRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+
+	projectName = strings.TrimSpace(projectName)
+	if projectName == "" {
+		return nil
+	}
+
+	for _, rule := range rules {
+		re, err := regexp.Compile(rule.Pattern)
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern %q: %w", rule.Pattern, err)
+		}
+
+		replacement := strings.ReplaceAll(rule.Replacement, "{{project_name}}", projectName)
+		if replacement == "" {
+			replacement = projectName
+		}
+
+		file := strings.Trim(strings.TrimSpace(rule.File), "/")
+		filePattern := strings.TrimSpace(rule.FilePattern)
+
+		switch {
+		case file != "":
+			fullPath := filepath.Join(targetDir, filepath.FromSlash(file))
+			if err := applyRegexRuleToFile(fullPath, re, replacement); err != nil {
+				return err
+			}
+		case filePattern != "":
+			matcher, err := regexp.Compile(filePattern)
+			if err != nil {
+				return fmt.Errorf("invalid file_pattern %q: %w", filePattern, err)
+			}
+
+			err = filepath.WalkDir(targetDir, func(path string, d os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if d.IsDir() {
+					return nil
+				}
+
+				rel, err := filepath.Rel(targetDir, path)
+				if err != nil {
+					return err
+				}
+				rel = filepath.ToSlash(rel)
+				if !matcher.MatchString(rel) {
+					return nil
+				}
+
+				return applyRegexRuleToFile(path, re, replacement)
+			})
+			if err != nil {
+				return err
+			}
+		default:
+			return errors.New("invalid project_name_regex_rules: file or file_pattern is required")
+		}
+	}
+
+	return nil
+}
+
+func applyRegexRuleToFile(filePath string, re *regexp.Regexp, replacement string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed reading replacement target %s: %w", filePath, err)
+	}
+
+	updated := re.ReplaceAll(data, []byte(replacement))
+	if bytes.Equal(updated, data) {
+		return nil
+	}
+
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(filePath); statErr == nil {
+		mode = info.Mode()
+	}
+
+	if err := os.WriteFile(filePath, updated, mode); err != nil {
+		return fmt.Errorf("failed writing replacement target %s: %w", filePath, err)
+	}
+
+	return nil
 }

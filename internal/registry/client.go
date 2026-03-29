@@ -108,14 +108,29 @@ type Client struct {
 // Template represents a project template with metadata about
 // the template repository and its source code.
 type Template struct {
-	Name        string `json:"name" yaml:"name"`
-	Description string `json:"description" yaml:"description"`
-	RepoURL     string `json:"repo_url" yaml:"repo_url"`
-	Repository  string `json:"repository" yaml:"repository"`
-	Repo        string `json:"repo" yaml:"repo"`
-	URL         string `json:"url" yaml:"url"`
-	Branch      string `json:"branch" yaml:"branch"`
-	Path        string `json:"path" yaml:"path"`
+	Name                  string                 `json:"name" yaml:"name"`
+	Description           string                 `json:"description" yaml:"description"`
+	RepoURL               string                 `json:"repo_url" yaml:"repo_url"`
+	Repository            string                 `json:"repository" yaml:"repository"`
+	Repo                  string                 `json:"repo" yaml:"repo"`
+	URL                   string                 `json:"url" yaml:"url"`
+	Branch                string                 `json:"branch" yaml:"branch"`
+	Path                  string                 `json:"path" yaml:"path"`
+	Replace               TemplateReplace        `json:"replace" yaml:"replace"`
+	ProjectNameRegexRules []ProjectNameRegexRule `json:"project_name_regex_rules" yaml:"project_name_regex_rules"`
+}
+
+// TemplateReplace defines shorthand replacement settings from templates.yaml.
+type TemplateReplace struct {
+	ProjectName string `json:"project_name" yaml:"project_name"`
+}
+
+// ProjectNameRegexRule defines one regex replacement applied to template files.
+type ProjectNameRegexRule struct {
+	File        string `json:"file" yaml:"file"`
+	FilePattern string `json:"file_pattern" yaml:"file_pattern"`
+	Pattern     string `json:"pattern" yaml:"pattern"`
+	Replacement string `json:"replacement" yaml:"replacement"`
 }
 
 // NewClient creates and returns a new registry client
@@ -650,6 +665,131 @@ func templateFromMap(m map[string]any, defaultName string) (Template, bool) {
 		RepoURL:     repo,
 		Branch:      strings.TrimSpace(stringValue(m["branch"])),
 		Path:        strings.TrimSpace(stringValue(m["path"])),
+		Replace: TemplateReplace{
+			ProjectName: projectNameReplaceFromAny(m["replace"]),
+		},
+		ProjectNameRegexRules: normalizeProjectNameRegexRules(regexRulesFromAny(firstNonNil(
+			m["project_name_regex_rules"],
+			m["name_regex_rules"],
+			m["regex_rules"],
+		))),
+	}, true
+}
+
+func firstNonNil(values ...any) any {
+	for _, v := range values {
+		if v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+func regexRulesFromAny(v any) []ProjectNameRegexRule {
+	if v == nil {
+		return nil
+	}
+
+	rules := []ProjectNameRegexRule{}
+	switch t := v.(type) {
+	case []ProjectNameRegexRule:
+		return t
+	case []any:
+		for _, item := range t {
+			rule, ok := regexRuleFromAny(item)
+			if ok {
+				rules = append(rules, rule)
+			}
+		}
+	}
+
+	return rules
+}
+
+func regexRuleFromAny(v any) (ProjectNameRegexRule, bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		rule := ProjectNameRegexRule{
+			File:        strings.TrimSpace(stringValue(t["file"])),
+			FilePattern: strings.TrimSpace(stringValue(t["file_pattern"])),
+			Pattern:     strings.TrimSpace(stringValue(t["pattern"])),
+			Replacement: stringValue(t["replacement"]),
+		}
+		if rule.Pattern == "" {
+			return ProjectNameRegexRule{}, false
+		}
+		return rule, true
+	case map[any]any:
+		converted := make(map[string]any, len(t))
+		for key, value := range t {
+			converted[fmt.Sprint(key)] = value
+		}
+		return regexRuleFromAny(converted)
+	default:
+		return ProjectNameRegexRule{}, false
+	}
+}
+
+func normalizeProjectNameRegexRules(raw []ProjectNameRegexRule) []ProjectNameRegexRule {
+	out := make([]ProjectNameRegexRule, 0, len(raw))
+	for _, rule := range raw {
+		normalized := ProjectNameRegexRule{
+			File:        strings.Trim(strings.TrimSpace(rule.File), "/"),
+			FilePattern: strings.TrimSpace(rule.FilePattern),
+			Pattern:     strings.TrimSpace(rule.Pattern),
+			Replacement: rule.Replacement,
+		}
+		if normalized.Pattern == "" {
+			continue
+		}
+		if normalized.Replacement == "" {
+			normalized.Replacement = "{{project_name}}"
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func projectNameReplaceFromAny(v any) string {
+	if v == nil {
+		return ""
+	}
+
+	switch t := v.(type) {
+	case map[string]any:
+		return strings.TrimSpace(stringValue(t["project_name"]))
+	case map[any]any:
+		converted := make(map[string]any, len(t))
+		for key, value := range t {
+			converted[fmt.Sprint(key)] = value
+		}
+		return projectNameReplaceFromAny(converted)
+	default:
+		return ""
+	}
+}
+
+func ruleFromProjectNameReplace(raw string) (ProjectNameRegexRule, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ProjectNameRegexRule{}, false
+	}
+
+	parts := strings.SplitN(raw, ":", 2)
+	if len(parts) != 2 {
+		return ProjectNameRegexRule{}, false
+	}
+
+	file := strings.Trim(strings.TrimSpace(parts[0]), "/")
+	pattern := strings.TrimSpace(parts[1])
+	if file == "" || pattern == "" {
+		return ProjectNameRegexRule{}, false
+	}
+
+	return ProjectNameRegexRule{
+		File:        file,
+		Pattern:     pattern,
+		Replacement: "{{project_name}}",
 	}, true
 }
 
@@ -686,6 +826,13 @@ func normalizeTemplates(raw []Template) []Template {
 			branch = "main"
 		}
 
+		rules := normalizeProjectNameRegexRules(tpl.ProjectNameRegexRules)
+		if len(rules) == 0 {
+			if shorthandRule, ok := ruleFromProjectNameReplace(tpl.Replace.ProjectName); ok {
+				rules = []ProjectNameRegexRule{shorthandRule}
+			}
+		}
+
 		key := strings.ToLower(name + "|" + repo)
 		if _, ok := seen[key]; ok {
 			continue
@@ -693,11 +840,13 @@ func normalizeTemplates(raw []Template) []Template {
 		seen[key] = struct{}{}
 
 		out = append(out, Template{
-			Name:        name,
-			Description: strings.TrimSpace(tpl.Description),
-			RepoURL:     repo,
-			Branch:      branch,
-			Path:        strings.TrimSpace(tpl.Path),
+			Name:                  name,
+			Description:           strings.TrimSpace(tpl.Description),
+			RepoURL:               repo,
+			Branch:                branch,
+			Path:                  strings.TrimSpace(tpl.Path),
+			Replace:               tpl.Replace,
+			ProjectNameRegexRules: rules,
 		})
 	}
 
