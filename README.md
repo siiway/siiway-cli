@@ -13,6 +13,7 @@ A lightweight CLI for scaffolding projects from remote template registries.
   - `v*` -> match an existing remote branch (for example `v1` or `release/v1`).
 - Support template subdirectory extraction (`path`) via sparse checkout.
 - Support project-name replacement rules defined in `templates.yaml`.
+- Support root `.template` file placeholder replacement and automatic rename.
 - Support multi-registry aliases in user config.
 - Support default GitHub token from CLI config.
 
@@ -105,6 +106,27 @@ Example:
 ```bash
 siiway new python-service@latest my-python-service
 ```
+
+With template replacement values:
+
+```bash
+siiway new python-service@latest my-python-service \
+  --pm uv \
+  --project-version 0.1.0 \
+  --project-author "Your Name" \
+  --project-description "My project"
+```
+
+After project creation, the CLI scans all files ending with `.template` in the generated project root, replaces built-in placeholders, then renames files by removing the `.template` suffix.
+
+Built-in placeholders:
+
+- `{pm}`
+- `{sw-version}`
+- `{project-name}`
+- `{project-version}`
+- `{project-author}`
+- `{project-description}`
 
 ## Authentication
 

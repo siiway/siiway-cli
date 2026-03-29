@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 
 	"github.com/SiiWay/siiway-cli/internal/appconfig"
@@ -19,10 +20,18 @@ import (
 
 var githubToken string
 var forceOverwrite bool
+var packageManager string
+var projectVersion string
+var projectAuthor string
+var projectDescription string
 
 func init() {
 	newCmd.Flags().StringVar(&githubToken, "token", "", "GitHub token for private repositories and higher API rate limits")
 	newCmd.Flags().BoolVarP(&forceOverwrite, "force", "f", false, "Overwrite existing target directory")
+	newCmd.Flags().StringVar(&packageManager, "pm", "", "Package manager placeholder value for templates")
+	newCmd.Flags().StringVar(&projectVersion, "project-version", "0.1.0", "Project version placeholder value for templates")
+	newCmd.Flags().StringVar(&projectAuthor, "project-author", "", "Project author placeholder value for templates")
+	newCmd.Flags().StringVar(&projectDescription, "project-description", "", "Project description placeholder value for templates")
 	rootCmd.AddCommand(newCmd)
 }
 
@@ -107,6 +116,7 @@ var newCmd = &cobra.Command{
 		selected.Branch = resolvedBranch
 
 		finalProjectName := projectName
+		replacements := buildTemplateReplacements(finalProjectName, selected.Description)
 
 		targetDir := filepath.Clean(finalProjectName)
 		if err := validateTargetDir(targetDir); err != nil {
@@ -121,6 +131,9 @@ var newCmd = &cobra.Command{
 		}
 
 		if err := cloneTemplate(selected, targetDir, finalProjectName, token); err != nil {
+			return err
+		}
+		if err := processTemplateFiles(targetDir, replacements); err != nil {
 			return err
 		}
 
@@ -628,6 +641,132 @@ func applyRegexRuleToFile(filePath string, re *regexp.Regexp, replacement string
 
 	if err := os.WriteFile(filePath, updated, mode); err != nil {
 		return fmt.Errorf("failed writing replacement target %s: %w", filePath, err)
+	}
+
+	return nil
+}
+
+func buildTemplateReplacements(projectName, templateDescription string) map[string]string {
+	pm := strings.TrimSpace(packageManager)
+
+	pv := strings.TrimSpace(projectVersion)
+	if pv == "" {
+		pv = "0.1.0"
+	}
+
+	author := strings.TrimSpace(projectAuthor)
+	if author == "" {
+		author = detectAuthor()
+	}
+
+	desc := strings.TrimSpace(projectDescription)
+	if desc == "" {
+		desc = strings.TrimSpace(templateDescription)
+	}
+	if desc == "" {
+		desc = projectName
+	}
+
+	return map[string]string{
+		"{pm}":                  pm,
+		"{sw-version}":          cliVersion(),
+		"{project-name}":        projectName,
+		"{project-version}":     pv,
+		"{project-author}":      author,
+		"{project-description}": desc,
+	}
+}
+
+func detectAuthor() string {
+	cmd := exec.Command("git", "config", "--get", "user.name")
+	out, err := cmd.Output()
+	if err == nil {
+		name := strings.TrimSpace(string(out))
+		if name != "" {
+			return name
+		}
+	}
+
+	if v := strings.TrimSpace(os.Getenv("GIT_AUTHOR_NAME")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("USER")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("USERNAME")); v != "" {
+		return v
+	}
+
+	return "unknown"
+}
+
+func cliVersion() string {
+	if v := strings.TrimSpace(rootCmd.Version); v != "" {
+		return v
+	}
+
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := strings.TrimSpace(bi.Main.Version); v != "" && v != "(devel)" {
+			return v
+		}
+	}
+
+	return "dev"
+}
+
+func processTemplateFiles(targetDir string, replacements map[string]string) error {
+	entries, err := os.ReadDir(targetDir)
+	if err != nil {
+		return fmt.Errorf("failed reading project root directory: %w", err)
+	}
+
+	replacerArgs := make([]string, 0, len(replacements)*2)
+	for key, value := range replacements {
+		replacerArgs = append(replacerArgs, key, value)
+	}
+	replacer := strings.NewReplacer(replacerArgs...)
+
+	processed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".template") {
+			continue
+		}
+
+		srcPath := filepath.Join(targetDir, name)
+		dstName := strings.TrimSuffix(name, ".template")
+		if strings.TrimSpace(dstName) == "" {
+			return fmt.Errorf("invalid template file name: %s", name)
+		}
+		dstPath := filepath.Join(targetDir, dstName)
+
+		data, readErr := os.ReadFile(srcPath)
+		if readErr != nil {
+			return fmt.Errorf("failed reading template file %s: %w", srcPath, readErr)
+		}
+
+		updated := []byte(replacer.Replace(string(data)))
+		mode := os.FileMode(0o644)
+		if info, statErr := entry.Info(); statErr == nil {
+			mode = info.Mode()
+		}
+
+		if writeErr := os.WriteFile(dstPath, updated, mode); writeErr != nil {
+			return fmt.Errorf("failed writing processed template file %s: %w", dstPath, writeErr)
+		}
+		if removeErr := os.Remove(srcPath); removeErr != nil {
+			return fmt.Errorf("failed removing source template file %s: %w", srcPath, removeErr)
+		}
+
+		processed++
+	}
+
+	if processed > 0 {
+		fmt.Printf("Processed %d template file(s) in project root\n", processed)
 	}
 
 	return nil

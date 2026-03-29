@@ -13,6 +13,7 @@
   - v* -> 匹配远程仓库中已存在的分支（例如 v1 或 release/v1）。
 - 支持通过 path 对模板子目录进行稀疏检出。
 - 支持在 templates.yaml 中定义项目名正则替换规则。
+- 支持根目录 `.template` 文件占位符替换并自动重命名。
 - 支持用户配置中的多注册中心别名。
 - 支持从配置中读取默认 GitHub Token。
 
@@ -105,6 +106,27 @@ siiway new <template_name>@<version> <project_name>
 ```bash
 siiway new python-service@latest my-python-service
 ```
+
+带模板替换参数：
+
+```bash
+siiway new python-service@latest my-python-service \
+  --pm uv \
+  --project-version 0.1.0 \
+  --project-author "Your Name" \
+  --project-description "My project"
+```
+
+创建完成后，CLI 会在生成项目的根目录中查找所有以 `.template` 结尾的文件，执行内置占位符替换，然后将文件名去掉 `.template` 后缀。
+
+内置占位符：
+
+- `{pm}`
+- `{sw-version}`
+- `{project-name}`
+- `{project-version}`
+- `{project-author}`
+- `{project-description}`
 
 ## 认证
 
