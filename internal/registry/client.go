@@ -1,0 +1,658 @@
+package registry
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	registryOwner = "siiway"
+	registryRepo  = "cli-templates"
+	registryRef   = "main"
+)
+
+var metadataFileCandidates = []string{
+	"templates.yaml",
+	"registry/templates.yaml",
+}
+
+// SourcePath returns the primary GitHub Contents API endpoint for registry metadata.
+func SourcePath() string {
+	return fmt.Sprintf(
+		"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
+		registryOwner,
+		registryRepo,
+		"templates.yaml",
+		registryRef,
+	)
+}
+
+type githubContentResp struct {
+	Type     string `json:"type"`
+	Encoding string `json:"encoding"`
+	Content  string `json:"content"`
+}
+
+// Client is a registry client for fetching template metadata
+// from the SiiWay CLI registry repository.
+type Client struct {
+	httpClient *http.Client
+	token      string
+}
+
+// Template represents a project template with metadata about
+// the template repository and its source code.
+type Template struct {
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description" yaml:"description"`
+	RepoURL     string `json:"repo_url" yaml:"repo_url"`
+	Repository  string `json:"repository" yaml:"repository"`
+	Repo        string `json:"repo" yaml:"repo"`
+	URL         string `json:"url" yaml:"url"`
+	Branch      string `json:"branch" yaml:"branch"`
+	Path        string `json:"path" yaml:"path"`
+}
+
+// NewClient creates and returns a new registry client
+// with a default HTTP timeout of 12 seconds.
+func NewClient(token string) *Client {
+	return &Client{
+		httpClient: &http.Client{Timeout: 12 * time.Second},
+		token:      strings.TrimSpace(token),
+	}
+}
+
+// FetchTemplates retrieves the list of available templates from the registry.
+// It only reads templates.yaml online and parses it.
+func (c *Client) FetchTemplates(ctx context.Context) ([]Template, error) {
+	templates, err := c.fetchFromFixedContentsAPI(ctx)
+	if err == nil && len(templates) > 0 {
+		return templates, nil
+	}
+	fixedContentsErr := err
+
+	templates, err = c.fetchFromContentsAPI(ctx)
+	if err == nil && len(templates) > 0 {
+		return templates, nil
+	}
+	contentsErr := err
+
+	templates, err = c.fetchFromTree(ctx)
+	if err == nil && len(templates) > 0 {
+		return templates, nil
+	}
+	treeErr := err
+
+	if fixedContentsErr != nil || contentsErr != nil || treeErr != nil {
+		return nil, fmt.Errorf(
+			"online registry fetch failed (contents-fixed: %v; contents-fallback: %v; tree-fallback: %v)",
+			fixedContentsErr,
+			contentsErr,
+			treeErr,
+		)
+	}
+
+	return nil, errors.New("unable to discover template metadata file in registry")
+}
+
+func (c *Client) fetchFromFixedContentsAPI(ctx context.Context) ([]Template, error) {
+	apiURL := SourcePath()
+	body, status, err := c.fetch(ctx, apiURL)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, errors.New("registry metadata file not found")
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("request failed with status %d for %s", status, apiURL)
+	}
+
+	var content githubContentResp
+	if err := json.Unmarshal(body, &content); err != nil {
+		return nil, fmt.Errorf("failed parsing github contents response: %w", err)
+	}
+	if content.Type != "file" || strings.ToLower(content.Encoding) != "base64" {
+		return nil, errors.New("unexpected github contents response for templates.yaml")
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(content.Content, "\n", ""))
+	if err != nil {
+		return nil, fmt.Errorf("failed base64 decoding metadata content: %w", err)
+	}
+
+	templates, err := parseTemplates(decoded, "templates.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("failed parsing templates.yaml: %w", err)
+	}
+	normalized := normalizeTemplates(templates)
+	if len(normalized) == 0 {
+		return nil, errors.New("no templates found in fixed contents registry metadata")
+	}
+
+	return normalized, nil
+}
+
+func (c *Client) fetchFromContentsAPI(ctx context.Context) ([]Template, error) {
+	branches := []string{registryRef, "main", "master"}
+
+	for _, branch := range branches {
+		for _, fileName := range fileCandidatesForBranch(branch) {
+			apiURL := fmt.Sprintf(
+				"https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
+				registryOwner,
+				registryRepo,
+				fileName,
+				branch,
+			)
+
+			body, status, err := c.fetch(ctx, apiURL)
+			if err != nil {
+				return nil, err
+			}
+			if status == http.StatusNotFound {
+				continue
+			}
+			if status != http.StatusOK {
+				return nil, fmt.Errorf("request failed with status %d for %s", status, apiURL)
+			}
+
+			var content githubContentResp
+			if err := json.Unmarshal(body, &content); err != nil {
+				return nil, fmt.Errorf("failed parsing github contents response: %w", err)
+			}
+			if content.Type != "file" || strings.ToLower(content.Encoding) != "base64" {
+				continue
+			}
+
+			decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(content.Content, "\n", ""))
+			if err != nil {
+				return nil, fmt.Errorf("failed base64 decoding metadata content: %w", err)
+			}
+
+			templates, err := parseTemplates(decoded, fileName)
+			if err != nil {
+				return nil, fmt.Errorf("failed parsing %s: %w", fileName, err)
+			}
+			normalized := normalizeTemplates(templates)
+			if len(normalized) > 0 {
+				return normalized, nil
+			}
+		}
+	}
+
+	return nil, errors.New("unable to fetch parseable metadata from github contents api")
+}
+
+func fileCandidatesForBranch(branch string) []string {
+	if branch == registryRef {
+		return []string{"templates.yaml", "registry/templates.yaml"}
+	}
+	return metadataFileCandidates
+}
+
+func (c *Client) fetchFromGitClone(ctx context.Context) ([]Template, error) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return nil, errors.New("git is required to access registry")
+	}
+
+	cloneURLs := []string{
+		"https://github.com/siiway/cli-templates.git",
+	}
+	if c.token == "" {
+		cloneURLs = append([]string{"git@github.com:siiway/cli-templates.git"}, cloneURLs...)
+	}
+
+	var cloneErrs []string
+	for _, cloneURL := range cloneURLs {
+		tempDir, err := os.MkdirTemp("", "siiway-cli-registry-")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(tempDir)
+
+		cloneCmd := c.newGitCloneCmd(ctx, cloneURL, tempDir)
+		if output, err := cloneCmd.CombinedOutput(); err != nil {
+			cloneErrs = append(cloneErrs, fmt.Sprintf("%s: %s", cloneURL, strings.TrimSpace(string(output))))
+			continue
+		}
+
+		templates, err := parseMetadataFromDir(tempDir)
+		if err != nil {
+			return nil, err
+		}
+		if len(templates) > 0 {
+			return templates, nil
+		}
+	}
+
+	if len(cloneErrs) > 0 {
+		return nil, fmt.Errorf("failed cloning registry repository: %s", strings.Join(cloneErrs, " | "))
+	}
+
+	return nil, errors.New("unable to clone registry repository")
+}
+
+func parseMetadataFromDir(root string) ([]Template, error) {
+	for _, fileName := range metadataFileCandidates {
+		fullPath := filepath.Join(root, fileName)
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			continue
+		}
+
+		templates, err := parseTemplates(data, fileName)
+		if err != nil {
+			return nil, fmt.Errorf("failed parsing %s: %w", fileName, err)
+		}
+		normalized := normalizeTemplates(templates)
+		if len(normalized) > 0 {
+			return normalized, nil
+		}
+	}
+
+	pathMatcher := regexp.MustCompile(`(?i)(template|registry|metadata).+\.(json|ya?ml)$`)
+	var found []Template
+
+	err := filepath.WalkDir(root, func(filePath string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		relPath, err := filepath.Rel(root, filePath)
+		if err != nil || !pathMatcher.MatchString(strings.ToLower(relPath)) {
+			return nil
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil
+		}
+
+		templates, err := parseTemplates(data, relPath)
+		if err != nil {
+			return nil
+		}
+		found = append(found, templates...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	normalized := normalizeTemplates(found)
+	if len(normalized) > 0 {
+		return normalized, nil
+	}
+
+	return nil, errors.New("no template metadata found in cloned registry")
+}
+
+func (c *Client) fetchFromTree(ctx context.Context) ([]Template, error) {
+	branches := []string{registryRef, "main", "master"}
+	pathMatcher := regexp.MustCompile(`(?i)(template|registry|metadata).+\.(json|ya?ml)$`)
+
+	type treeNode struct {
+		Path string `json:"path"`
+		SHA  string `json:"sha"`
+		Type string `json:"type"`
+	}
+	type treeResp struct {
+		Tree []treeNode `json:"tree"`
+	}
+	type blobResp struct {
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+
+	for _, branch := range branches {
+		apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1", registryOwner, registryRepo, branch)
+		body, status, err := c.fetch(ctx, apiURL)
+		if err != nil {
+			return nil, err
+		}
+		if status == http.StatusNotFound {
+			continue
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("request failed with status %d for %s", status, apiURL)
+		}
+
+		var tree treeResp
+		if err := json.Unmarshal(body, &tree); err != nil {
+			return nil, fmt.Errorf("failed parsing github tree response: %w", err)
+		}
+
+		for _, node := range tree.Tree {
+			if node.Type != "blob" || !pathMatcher.MatchString(node.Path) {
+				continue
+			}
+
+			blobURL := fmt.Sprintf(
+				"https://api.github.com/repos/%s/%s/git/blobs/%s",
+				registryOwner,
+				registryRepo,
+				node.SHA,
+			)
+
+			blobBody, blobStatus, err := c.fetch(ctx, blobURL)
+			if err != nil {
+				return nil, err
+			}
+			if blobStatus != http.StatusOK {
+				continue
+			}
+
+			var blob blobResp
+			if err := json.Unmarshal(blobBody, &blob); err != nil {
+				continue
+			}
+			if strings.ToLower(blob.Encoding) != "base64" {
+				continue
+			}
+
+			decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(blob.Content, "\n", ""))
+			if err != nil {
+				continue
+			}
+
+			templates, err := parseTemplates(decoded, node.Path)
+			if err != nil {
+				continue
+			}
+			normalized := normalizeTemplates(templates)
+			if len(normalized) > 0 {
+				return normalized, nil
+			}
+		}
+	}
+
+	return nil, errors.New("unable to find parseable metadata from github tree")
+}
+
+func (c *Client) fetch(ctx context.Context, url string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "siiway-cli")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+	return body, resp.StatusCode, nil
+}
+
+func (c *Client) newGitCloneCmd(ctx context.Context, cloneURL, targetDir string) *exec.Cmd {
+	args := []string{}
+	if c.token != "" && strings.HasPrefix(strings.ToLower(cloneURL), "https://") {
+		credential := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + c.token))
+		args = append(args, "-c", "http.extraHeader=AUTHORIZATION: basic "+credential)
+	}
+	args = append(args, "clone", "--depth", "1", cloneURL, targetDir)
+	cloneCmd := exec.CommandContext(ctx, "git", args...)
+	cloneCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return cloneCmd
+}
+
+func parseTemplates(data []byte, fileName string) ([]Template, error) {
+	ext := strings.ToLower(path.Ext(fileName))
+	if ext == ".yaml" || ext == ".yml" {
+		return parseYAMLTemplates(data)
+	}
+	return parseJSONTemplates(data)
+}
+
+func parseJSONTemplates(data []byte) ([]Template, error) {
+	type wrapped struct {
+		Templates []Template `json:"templates"`
+	}
+
+	var list []Template
+	if err := json.Unmarshal(data, &list); err == nil {
+		return list, nil
+	}
+
+	var w wrapped
+	if err := json.Unmarshal(data, &w); err == nil && len(w.Templates) > 0 {
+		return w.Templates, nil
+	}
+
+	var byName map[string]Template
+	if err := json.Unmarshal(data, &byName); err == nil && len(byName) > 0 {
+		out := make([]Template, 0, len(byName))
+		for name, tpl := range byName {
+			if strings.TrimSpace(tpl.Name) == "" {
+				tpl.Name = name
+			}
+			out = append(out, tpl)
+		}
+		return out, nil
+	}
+
+	var repoByName map[string]string
+	if err := json.Unmarshal(data, &repoByName); err == nil && len(repoByName) > 0 {
+		out := make([]Template, 0, len(repoByName))
+		for name, repo := range repoByName {
+			out = append(out, Template{Name: name, RepoURL: repo})
+		}
+		return out, nil
+	}
+
+	return nil, errors.New("unsupported json format")
+}
+
+func parseYAMLTemplates(data []byte) ([]Template, error) {
+	type wrapped struct {
+		Templates []Template `yaml:"templates"`
+	}
+
+	var list []Template
+	if err := yaml.Unmarshal(data, &list); err == nil && len(list) > 0 {
+		return list, nil
+	}
+
+	var w wrapped
+	if err := yaml.Unmarshal(data, &w); err == nil && len(w.Templates) > 0 {
+		return w.Templates, nil
+	}
+
+	var byName map[string]Template
+	if err := yaml.Unmarshal(data, &byName); err == nil && len(byName) > 0 {
+		out := make([]Template, 0, len(byName))
+		for name, tpl := range byName {
+			if strings.TrimSpace(tpl.Name) == "" {
+				tpl.Name = name
+			}
+			out = append(out, tpl)
+		}
+		return out, nil
+	}
+
+	var repoByName map[string]string
+	if err := yaml.Unmarshal(data, &repoByName); err == nil && len(repoByName) > 0 {
+		out := make([]Template, 0, len(repoByName))
+		for name, repo := range repoByName {
+			out = append(out, Template{Name: name, RepoURL: repo})
+		}
+		return out, nil
+	}
+
+	var generic any
+	if err := yaml.Unmarshal(data, &generic); err == nil {
+		out := collectTemplatesFromGeneric(generic, "")
+		if len(out) > 0 {
+			return out, nil
+		}
+	}
+
+	return nil, errors.New("unsupported yaml format")
+}
+
+func collectTemplatesFromGeneric(node any, defaultName string) []Template {
+	result := []Template{}
+
+	switch v := node.(type) {
+	case map[string]any:
+		if t, ok := templateFromMap(v, defaultName); ok {
+			result = append(result, t)
+		}
+		for key, child := range v {
+			result = append(result, collectTemplatesFromGeneric(child, key)...)
+		}
+	case map[any]any:
+		converted := make(map[string]any, len(v))
+		for key, child := range v {
+			converted[fmt.Sprint(key)] = child
+		}
+		result = append(result, collectTemplatesFromGeneric(converted, defaultName)...)
+	case []any:
+		for _, child := range v {
+			result = append(result, collectTemplatesFromGeneric(child, defaultName)...)
+		}
+	}
+
+	return result
+}
+
+func templateFromMap(m map[string]any, defaultName string) (Template, bool) {
+	repo := firstNonEmpty(
+		stringValue(m["repo_url"]),
+		stringValue(m["repository"]),
+		stringValue(m["repo"]),
+		stringValue(m["url"]),
+	)
+	if strings.TrimSpace(repo) == "" {
+		return Template{}, false
+	}
+
+	name := strings.TrimSpace(stringValue(m["name"]))
+	if name == "" {
+		name = strings.TrimSpace(defaultName)
+	}
+
+	return Template{
+		Name:        name,
+		Description: strings.TrimSpace(stringValue(m["description"])),
+		RepoURL:     repo,
+		Branch:      strings.TrimSpace(stringValue(m["branch"])),
+		Path:        strings.TrimSpace(stringValue(m["path"])),
+	}, true
+}
+
+func stringValue(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case fmt.Stringer:
+		return t.String()
+	default:
+		return ""
+	}
+}
+
+func normalizeTemplates(raw []Template) []Template {
+	seen := map[string]struct{}{}
+	out := make([]Template, 0, len(raw))
+
+	for _, tpl := range raw {
+		repo := firstNonEmpty(tpl.RepoURL, tpl.Repository, tpl.Repo, tpl.URL)
+		repo = normalizeRepoURL(repo)
+		if repo == "" {
+			continue
+		}
+
+		name := strings.TrimSpace(tpl.Name)
+		if name == "" {
+			parts := strings.Split(strings.TrimSuffix(repo, ".git"), "/")
+			name = parts[len(parts)-1]
+		}
+
+		branch := strings.TrimSpace(tpl.Branch)
+		if branch == "" {
+			branch = "main"
+		}
+
+		key := strings.ToLower(name + "|" + repo)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		out = append(out, Template{
+			Name:        name,
+			Description: strings.TrimSpace(tpl.Description),
+			RepoURL:     repo,
+			Branch:      branch,
+			Path:        strings.TrimSpace(tpl.Path),
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+
+	return out
+}
+
+func normalizeRepoURL(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://") || strings.HasPrefix(v, "git@") {
+		return v
+	}
+
+	if strings.HasPrefix(v, "github.com/") {
+		return "https://" + v
+	}
+
+	if strings.Count(v, "/") == 1 {
+		return "https://github.com/" + v
+	}
+
+	return v
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}

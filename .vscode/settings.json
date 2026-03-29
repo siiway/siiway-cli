@@ -1,0 +1,13 @@
+{
+  "editor.insertSpaces": true,
+  "editor.tabSize": 2,
+  "editor.formatOnSave": true,
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.insertSpaces": false,
+    "editor.tabSize": 2
+  },
+  "go.formatTool": "gofmt",
+  "go.lintTool": "golint",
+  "go.vetOnSave": "package"
+}
