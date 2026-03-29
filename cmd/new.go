@@ -24,7 +24,12 @@ func init() {
 var newCmd = &cobra.Command{
 	Use:   "new <template_name>@<version> <project_name>",
 	Short: "Create a new project from a template",
-	Args:  cobra.ExactArgs(2),
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 || len(args) == 2 {
+			return nil
+		}
+		return errors.New("accepts either no args (interactive mode) or <template_name>@<version> <project_name>")
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		token := strings.TrimSpace(githubToken)
 		if token == "" {
@@ -40,15 +45,32 @@ var newCmd = &cobra.Command{
 			return errors.New("no templates found in registry")
 		}
 
-		templateName, version, err := parseTemplateSpecifier(args[0])
-		if err != nil {
-			return err
-		}
-		projectName := strings.TrimSpace(args[1])
+		var selected registry.Template
+		var version string
+		var projectName string
 
-		selected, err := findTemplateByName(templates, templateName)
-		if err != nil {
-			return err
+		if len(args) == 0 {
+			if !isInteractive() {
+				return errors.New("non-interactive terminal detected; please use: siiway new <template_name>@<version> <project_name>")
+			}
+
+			var pickErr error
+			selected, version, projectName, pickErr = runNewInteractive(templates)
+			if pickErr != nil {
+				return pickErr
+			}
+		} else {
+			templateName, parsedVersion, err := parseTemplateSpecifier(args[0])
+			if err != nil {
+				return err
+			}
+			projectName = strings.TrimSpace(args[1])
+			version = parsedVersion
+
+			selected, err = findTemplateByName(templates, templateName)
+			if err != nil {
+				return err
+			}
 		}
 
 		resolvedBranch, err := resolveTemplateBranch(selected.RepoURL, version, token)
@@ -78,6 +100,25 @@ var newCmd = &cobra.Command{
 	},
 }
 
+func runNewInteractive(templates []registry.Template) (registry.Template, string, string, error) {
+	selected, err := chooseTemplateTUI(templates)
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+
+	version, err := chooseTemplateVersion("latest")
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+
+	projectName, err := chooseProjectName(selected.Name)
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+
+	return selected, version, projectName, nil
+}
+
 func parseTemplateSpecifier(spec string) (string, string, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
@@ -105,6 +146,78 @@ func findTemplateByName(templates []registry.Template, templateName string) (reg
 		}
 	}
 	return registry.Template{}, fmt.Errorf("template not found: %s", templateName)
+}
+
+func chooseTemplateTUI(templates []registry.Template) (registry.Template, error) {
+	selectPrompt := promptui.Select{
+		Label: "Step 1/4: Select a template",
+		Items: templates,
+		Size:  12,
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}",
+			Active:   "▸ {{ .Name | cyan }} - {{ .Description | faint }}",
+			Inactive: "  {{ .Name }} - {{ .Description }}",
+			Selected: "Selected: {{ .Name | green }}",
+		},
+		Searcher: func(input string, index int) bool {
+			item := templates[index]
+			q := strings.ToLower(strings.TrimSpace(input))
+			return strings.Contains(strings.ToLower(item.Name), q) || strings.Contains(strings.ToLower(item.Description), q)
+		},
+	}
+
+	idx, _, err := selectPrompt.Run()
+	if err != nil {
+		return registry.Template{}, fmt.Errorf("template selection cancelled: %w", err)
+	}
+
+	return templates[idx], nil
+}
+
+func chooseTemplateVersion(defaultVersion string) (string, error) {
+	prompt := promptui.Prompt{
+		Label:   "Step 2/4: Template version",
+		Default: defaultVersion,
+		Validate: func(input string) error {
+			if strings.TrimSpace(input) == "" {
+				return errors.New("template version cannot be empty")
+			}
+			return nil
+		},
+	}
+
+	v, err := prompt.Run()
+	if err != nil {
+		return "", fmt.Errorf("template version input cancelled: %w", err)
+	}
+
+	return strings.TrimSpace(v), nil
+}
+
+func chooseProjectName(defaultName string) (string, error) {
+	name := strings.TrimSpace(defaultName)
+	if name == "" {
+		name = "my-project"
+	}
+
+	prompt := promptui.Prompt{
+		Label:   "Step 3/4: Project name",
+		Default: name,
+		Validate: func(input string) error {
+			input = strings.TrimSpace(input)
+			if input == "" {
+				return errors.New("project name cannot be empty")
+			}
+			return validateTargetDir(filepath.Clean(input))
+		},
+	}
+
+	v, err := prompt.Run()
+	if err != nil {
+		return "", fmt.Errorf("project name input cancelled: %w", err)
+	}
+
+	return strings.TrimSpace(v), nil
 }
 
 func resolveTemplateBranch(repoURL, version, token string) (string, error) {
@@ -200,7 +313,7 @@ func confirmCreation(t registry.Template, projectName, targetDir string) error {
 		return nil
 	}
 
-	fmt.Printf("\nStep 3/3: Confirm configuration\n")
+	fmt.Printf("\nStep 4/4: Confirm configuration\n")
 	fmt.Printf("  Template: %s\n", t.Name)
 	fmt.Printf("  Repository: %s\n", t.RepoURL)
 	fmt.Printf("  Project name: %s\n", projectName)
