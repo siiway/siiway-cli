@@ -13,6 +13,7 @@ $Platforms = @(
     @{GOOS="darwin"; GOARCH="amd64"},
     @{GOOS="darwin"; GOARCH="arm64"},
     @{GOOS="windows"; GOARCH="amd64"}
+    @{GOOS="windows"; GOARCH="arm64"}
 )
 
 # Parse command line arguments

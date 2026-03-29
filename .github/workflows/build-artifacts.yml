@@ -1,0 +1,77 @@
+name: Build Multi-Platform Artifacts
+
+on:
+  push:
+    branches:
+      - main
+    # tags:
+    #   - "v*"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Compute build metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          GIT_COMMIT="$(git rev-parse --short HEAD)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
+          echo "git_commit=${GIT_COMMIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+
+          OUTPUT_NAME="siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            OUTPUT_NAME="${OUTPUT_NAME}.exe"
+          fi
+
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -ldflags="-X 'github.com/SiiWay/siiway-cli/cmd.Version=${{ steps.meta.outputs.version }}' -X 'github.com/SiiWay/siiway-cli/cmd.BuildTime=${{ steps.meta.outputs.build_time }}' -X 'github.com/SiiWay/siiway-cli/cmd.GitCommit=${{ steps.meta.outputs.git_commit }}'" \
+            -o "bin/${OUTPUT_NAME}" \
+            .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bin/siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}*
+          if-no-files-found: error
+          retention-days: 30
