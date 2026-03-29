@@ -2,9 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/SiiWay/siiway-cli/internal/appconfig"
@@ -20,27 +17,16 @@ var versionCmd = &cobra.Command{
 	Short:              "Manage language runtime versions",
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		listMode, remainingArgs, err := parseVersionInvocation(args)
+		listMode, remainingArgs, err := parseListInvocation("version", args)
 		if err != nil {
 			return err
 		}
 
-		cfg, err := appconfig.Load()
-		if err != nil {
-			return fmt.Errorf("failed loading global config: %w", err)
-		}
-
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed getting current directory: %w", err)
-		}
-
-		projectCfg, err := loadProjectConfig(filepath.Join(cwd, ".siiway.yaml"))
+		runtimeCtx, err := loadLanguageRuntimeContext()
 		if err != nil {
 			return err
 		}
-
-		languages := mergeLanguages(cfg.Languages, projectCfg.Languages)
+		languages := runtimeCtx.Languages
 		if len(languages) == 0 {
 			return fmt.Errorf("no languages configuration found in global config or .siiway.yaml")
 		}
@@ -49,11 +35,11 @@ var versionCmd = &cobra.Command{
 			if len(remainingArgs) > 0 {
 				return fmt.Errorf("--list (-l) does not accept language/version arguments")
 			}
-			printAvailableVersionBackends(cwd, projectCfg.Language, languages)
+			printAvailableVersionBackends(runtimeCtx.Cwd, runtimeCtx.Project.Language, languages)
 			return nil
 		}
 
-		language, targetVersion, options, err := resolveVersionInvocation(cwd, projectCfg.Language, languages, remainingArgs)
+		language, targetVersion, options, err := resolveVersionInvocation(runtimeCtx.Cwd, runtimeCtx.Project.Language, languages, remainingArgs)
 		if err != nil {
 			return err
 		}
@@ -69,12 +55,7 @@ var versionCmd = &cobra.Command{
 			return fmt.Errorf("resolved version command is empty for language %q", language)
 		}
 
-		execCmd := exec.CommandContext(cmd.Context(), "sh", "-c", rendered)
-		execCmd.Stdout = os.Stdout
-		execCmd.Stderr = os.Stderr
-		execCmd.Stdin = os.Stdin
-		execCmd.Dir = cwd
-		if err := execCmd.Run(); err != nil {
+		if err := runShellCommand(cmd.Context(), runtimeCtx.Cwd, rendered); err != nil {
 			return fmt.Errorf("version command failed: %w", err)
 		}
 
@@ -82,29 +63,8 @@ var versionCmd = &cobra.Command{
 	},
 }
 
-func parseVersionInvocation(args []string) (bool, []string, error) {
-	listMode := false
-	remaining := args
-
-	for len(remaining) > 0 {
-		token := strings.TrimSpace(remaining[0])
-		switch token {
-		case "-l", "--list":
-			listMode = true
-			remaining = remaining[1:]
-		case "--":
-			return listMode, remaining, nil
-		default:
-			if strings.HasPrefix(token, "-") {
-				return false, nil, fmt.Errorf("unknown flag for version: %s", token)
-			}
-			return listMode, remaining, nil
-		}
-	}
-
-	return listMode, remaining, nil
-}
-
+// resolveVersionInvocation parses version command args and returns language,
+// target version, and passthrough options.
 func resolveVersionInvocation(cwd, preferredLanguage string, languages map[string]appconfig.LanguageConfig, args []string) (string, string, []string, error) {
 	if len(args) == 0 {
 		return "", "", nil, fmt.Errorf("version is required")
@@ -138,6 +98,8 @@ func resolveVersionInvocation(cwd, preferredLanguage string, languages map[strin
 	return language, strings.TrimSpace(positional[1]), options, nil
 }
 
+// resolveVersionCommandTemplate resolves a concrete template using custom config
+// first, then built-in backend defaults.
 func resolveVersionCommandTemplate(language string, cfg appconfig.LanguageVersionConfig) (string, error) {
 	if strings.TrimSpace(cfg.Use) != "" {
 		return strings.TrimSpace(cfg.Use), nil
@@ -155,6 +117,8 @@ func resolveVersionCommandTemplate(language string, cfg appconfig.LanguageVersio
 	}
 }
 
+// renderVersionCommand renders placeholders in version template and appends
+// options when {options} is not explicitly declared.
 func renderVersionCommand(template, targetVersion string, options []string) string {
 	targetVersion = strings.TrimSpace(targetVersion)
 	optionsValue := joinShellEscaped(options)
@@ -172,6 +136,8 @@ func renderVersionCommand(template, targetVersion string, options []string) stri
 	return strings.TrimSpace(replaced)
 }
 
+// printAvailableVersionBackends prints configured version backend/command for
+// configured/detected language, or for all languages when detection fails.
 func printAvailableVersionBackends(cwd, preferredLanguage string, languages map[string]appconfig.LanguageConfig) {
 	if preferredLanguage != "" {
 		preferredLanguage = strings.ToLower(strings.TrimSpace(preferredLanguage))
@@ -196,6 +162,7 @@ func printAvailableVersionBackends(cwd, preferredLanguage string, languages map[
 	}
 }
 
+// printSingleLanguageVersionConfig prints one language's version backend and resolved command template.
 func printSingleLanguageVersionConfig(language string, cfg appconfig.LanguageConfig) {
 	backend := cfg.Version.Backend
 	if backend == "" {

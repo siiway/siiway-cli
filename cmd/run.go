@@ -2,9 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/SiiWay/siiway-cli/internal/appconfig"
@@ -20,27 +17,16 @@ var runCmd = &cobra.Command{
 	Short:              "Run project commands from configuration",
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		listMode, remainingArgs, err := parseRunInvocation(args)
+		listMode, remainingArgs, err := parseListInvocation("run", args)
 		if err != nil {
 			return err
 		}
 
-		cfg, err := appconfig.Load()
-		if err != nil {
-			return fmt.Errorf("failed loading global config: %w", err)
-		}
-
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("failed getting current directory: %w", err)
-		}
-
-		projectCfg, err := loadProjectConfig(filepath.Join(cwd, ".siiway.yaml"))
+		runtimeCtx, err := loadLanguageRuntimeContext()
 		if err != nil {
 			return err
 		}
-
-		languages := mergeLanguages(cfg.Languages, projectCfg.Languages)
+		languages := runtimeCtx.Languages
 		if len(languages) == 0 {
 			return fmt.Errorf("no languages.run configuration found in global config or .siiway.yaml")
 		}
@@ -49,14 +35,14 @@ var runCmd = &cobra.Command{
 			if len(remainingArgs) > 0 {
 				return fmt.Errorf("--list (-l) does not accept action or arguments")
 			}
-			printAvailableRunActions(cwd, projectCfg.Language, languages)
+			printAvailableRunActions(runtimeCtx.Cwd, runtimeCtx.Project.Language, languages)
 			return nil
 		}
 		if len(remainingArgs) == 0 {
 			return fmt.Errorf("action is required")
 		}
 
-		lang, err := resolveLanguage(cwd, projectCfg.Language, languages)
+		lang, err := resolveLanguage(runtimeCtx.Cwd, runtimeCtx.Project.Language, languages)
 		if err != nil {
 			return err
 		}
@@ -74,12 +60,7 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("resolved command is empty for language %q action %q", lang, action)
 		}
 
-		execCmd := exec.CommandContext(cmd.Context(), "sh", "-c", rendered)
-		execCmd.Stdout = os.Stdout
-		execCmd.Stderr = os.Stderr
-		execCmd.Stdin = os.Stdin
-		execCmd.Dir = cwd
-		if err := execCmd.Run(); err != nil {
+		if err := runShellCommand(cmd.Context(), runtimeCtx.Cwd, rendered); err != nil {
 			return fmt.Errorf("run command failed: %w", err)
 		}
 
@@ -87,29 +68,8 @@ var runCmd = &cobra.Command{
 	},
 }
 
-func parseRunInvocation(args []string) (bool, []string, error) {
-	listMode := false
-	remaining := args
-
-	for len(remaining) > 0 {
-		token := strings.TrimSpace(remaining[0])
-		switch token {
-		case "-l", "--list":
-			listMode = true
-			remaining = remaining[1:]
-		case "--":
-			return listMode, remaining, nil
-		default:
-			if strings.HasPrefix(token, "-") {
-				return false, nil, fmt.Errorf("unknown flag for run: %s", token)
-			}
-			return listMode, remaining, nil
-		}
-	}
-
-	return listMode, remaining, nil
-}
-
+// printAvailableRunActions prints available run actions for configured/detected language,
+// or grouped by language when auto-detection fails.
 func printAvailableRunActions(cwd, preferredLanguage string, languages map[string]appconfig.LanguageConfig) {
 	if preferredLanguage != "" {
 		preferredLanguage = strings.ToLower(strings.TrimSpace(preferredLanguage))
@@ -147,6 +107,8 @@ func printAvailableRunActions(cwd, preferredLanguage string, languages map[strin
 	}
 }
 
+// renderRunCommand renders a run command template and appends args/options when
+// placeholders are omitted for backward compatibility.
 func renderRunCommand(template string, arguments, options []string) string {
 	argsValue := joinShellEscaped(arguments)
 	optionsValue := joinShellEscaped(options)

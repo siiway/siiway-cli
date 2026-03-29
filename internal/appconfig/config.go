@@ -25,11 +25,13 @@ type Config struct {
 	Languages       map[string]LanguageConfig `json:"languages" yaml:"languages"`
 }
 
+// LanguageConfig defines language-specific command settings.
 type LanguageConfig struct {
 	Run     map[string]string     `json:"run" yaml:"run"`
 	Version LanguageVersionConfig `json:"version" yaml:"version"`
 }
 
+// LanguageVersionConfig defines runtime version backend/template settings per language.
 type LanguageVersionConfig struct {
 	Backend string `json:"backend" yaml:"backend"`
 	Use     string `json:"use" yaml:"use"`
