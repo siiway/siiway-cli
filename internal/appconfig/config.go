@@ -22,6 +22,11 @@ type Config struct {
 	CurrentRegistry string                    `json:"current_registry" yaml:"current_registry"`
 	Registries      map[string]RegistryConfig `json:"registries" yaml:"registries"`
 	GitHubToken     string                    `json:"github_token" yaml:"github_token"`
+	Languages       map[string]LanguageConfig `json:"languages" yaml:"languages"`
+}
+
+type LanguageConfig struct {
+	Run map[string]string `json:"run" yaml:"run"`
 }
 
 // RegistryConfig points to a GitHub repository that contains templates metadata.
@@ -158,6 +163,32 @@ func (c *Config) applyDefaults() {
 	}
 
 	c.GitHubToken = strings.TrimSpace(c.GitHubToken)
+
+	if c.Languages == nil {
+		c.Languages = map[string]LanguageConfig{}
+	}
+	for lang, langCfg := range c.Languages {
+		normalizedLang := strings.ToLower(strings.TrimSpace(lang))
+		if normalizedLang == "" {
+			continue
+		}
+
+		normalizedRun := map[string]string{}
+		for action, command := range langCfg.Run {
+			normalizedAction := strings.ToLower(strings.TrimSpace(action))
+			normalizedCommand := strings.TrimSpace(command)
+			if normalizedAction == "" || normalizedCommand == "" {
+				continue
+			}
+			normalizedRun[normalizedAction] = normalizedCommand
+		}
+		langCfg.Run = normalizedRun
+
+		if normalizedLang != lang {
+			delete(c.Languages, lang)
+		}
+		c.Languages[normalizedLang] = langCfg
+	}
 }
 
 // ActiveRegistry returns the currently selected registry configuration.

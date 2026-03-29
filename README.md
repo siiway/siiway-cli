@@ -68,18 +68,6 @@ curl -fsSL https://cli.siiway.org/get | SIIWAY_VERSION=v1.0.0 sh
 
 The install script fetches binaries from GitHub Releases.
 
-### Deploy install endpoint to Cloudflare Pages
-
-The installer endpoint source is in `deploy/cf-pages/_worker.js`.
-
-GitHub workflow file: `.github/workflows/deploy-install-script.yml`
-
-Required GitHub repository settings:
-
-- Secret: `CLOUDFLARE_API_TOKEN`
-- Secret: `CLOUDFLARE_ACCOUNT_ID`
-- Variable: `CF_PAGES_PROJECT_NAME`
-
 ## Quick Start
 
 ### Interactive mode
@@ -105,6 +93,56 @@ Example:
 
 ```bash
 siiway new python-service@latest my-python-service
+```
+
+### Run project commands
+
+```bash
+siiway run <action> [args...] [-- options...]
+```
+
+List available run actions from the effective configuration:
+
+```bash
+siiway run --list
+siiway run -l
+```
+
+The `run` command loads subcommand templates from two sources:
+
+- Global config: `~/.config/siiway/config.yaml`
+- Project config: `.siiway.yaml` in current working directory (higher priority)
+
+You can set `language` in `.siiway.yaml` to force the current project language. When set, CLI skips auto-detection and can run non-built-in project types as long as `languages.<language>.run.*` is configured.
+
+Config path: `languages.<language>.run.<action>`
+
+Supported placeholders:
+
+- `{args}` (alias: `{arguments}`)
+- `{options}`
+
+If placeholders are omitted in a run template, CLI appends args/options to the end automatically.
+
+Example:
+
+```bash
+siiway run add typescript -- --clean
+```
+
+With:
+
+```yaml
+languages:
+  node:
+    run:
+      add: bun add {arguments} {options}
+```
+
+Final command:
+
+```bash
+bun add typescript --clean
 ```
 
 With template replacement values:

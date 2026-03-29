@@ -68,18 +68,6 @@ curl -fsSL https://cli.siiway.org/get | SIIWAY_VERSION=v1.0.0 sh
 
 安装脚本会从 GitHub Releases 下载二进制文件。
 
-### 部署安装端点到 Cloudflare Pages
-
-安装端点源码位于 `deploy/cf-pages/_worker.js`。
-
-GitHub 工作流文件：`.github/workflows/deploy-install-script.yml`
-
-需要在仓库设置中配置：
-
-- Secret：`CLOUDFLARE_API_TOKEN`
-- Secret：`CLOUDFLARE_ACCOUNT_ID`
-- Variable：`CF_PAGES_PROJECT_NAME`
-
 ## 快速开始
 
 ### 交互模式
@@ -105,6 +93,56 @@ siiway new <template_name>@<version> <project_name>
 
 ```bash
 siiway new python-service@latest my-python-service
+```
+
+### 运行项目命令
+
+```bash
+siiway run <action> [args...] [-- options...]
+```
+
+查看当前生效配置中的可用 run 子命令：
+
+```bash
+siiway run --list
+siiway run -l
+```
+
+`run` 命令会从两个来源读取子命令模板：
+
+- 全局配置：`~/.config/siiway/config.yaml`
+- 项目配置：当前工作目录下 `.siiway.yaml`（优先级更高）
+
+你可以在 `.siiway.yaml` 中设置 `language` 指定当前项目语言。设置后 CLI 会跳过自动检测；只要配置了 `languages.<language>.run.*`，即可支持未内置的项目类型。
+
+配置路径：`languages.<language>.run.<action>`
+
+支持占位符：
+
+- `{args}`（别名：`{arguments}`）
+- `{options}`
+
+如果 run 模板中未声明占位符，CLI 会自动将 args/options 追加到命令末尾。
+
+示例：
+
+```bash
+siiway run add typescript -- --clean
+```
+
+配置为：
+
+```yaml
+languages:
+  node:
+    run:
+      add: bun add {arguments} {options}
+```
+
+最终执行命令：
+
+```bash
+bun add typescript --clean
 ```
 
 带模板替换参数：
