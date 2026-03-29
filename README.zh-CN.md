@@ -45,6 +45,40 @@ go build -o siiway .
 
 默认会在 bin/ 目录输出二进制文件。
 
+### 通过 cli.siiway.org 一键安装
+
+Windows（PowerShell）：
+
+```powershell
+irm https://cli.siiway.org/get | iex
+```
+
+Linux / macOS：
+
+```bash
+curl -fsSL https://cli.siiway.org/get | sh
+```
+
+指定版本安装：
+
+```bash
+curl -fsSL https://cli.siiway.org/get | SIIWAY_VERSION=v1.0.0 sh
+```
+
+安装脚本会从 GitHub Releases 下载二进制文件。
+
+### 部署安装端点到 Cloudflare Pages
+
+安装端点源码位于 `deploy/cf-pages/_worker.js`。
+
+GitHub 工作流文件：`.github/workflows/deploy-install-script.yml`
+
+需要在仓库设置中配置：
+
+- Secret：`CLOUDFLARE_API_TOKEN`
+- Secret：`CLOUDFLARE_ACCOUNT_ID`
+- Variable：`CF_PAGES_PROJECT_NAME`
+
 ## 快速开始
 
 ### 交互模式
@@ -198,6 +232,13 @@ GitHub Actions 工作流会构建以下平台：
 - windows/arm64
 
 工作流会按平台分别上传 artifact。
+
+## Release 发布
+
+GitHub Release 工作流文件：`.github/workflows/release.yml`
+
+- 推送 `v*` 标签（例如 `v1.0.0`）后，会自动构建全部平台并发布 Release 资源。
+- 也支持手动触发工作流并传入 `tag` 参数。
 
 ## 常见问题
 

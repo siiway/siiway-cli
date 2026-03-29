@@ -45,6 +45,40 @@ Multi-platform build:
 
 Output binaries are generated in `bin/` by default.
 
+### One-line install via cli.siiway.org
+
+Windows (PowerShell):
+
+```powershell
+irm https://cli.siiway.org/get | iex
+```
+
+Linux / macOS:
+
+```bash
+curl -fsSL https://cli.siiway.org/get | sh
+```
+
+Pin a version:
+
+```bash
+curl -fsSL https://cli.siiway.org/get | SIIWAY_VERSION=v1.0.0 sh
+```
+
+The install script fetches binaries from GitHub Releases.
+
+### Deploy install endpoint to Cloudflare Pages
+
+The installer endpoint source is in `deploy/cf-pages/_worker.js`.
+
+GitHub workflow file: `.github/workflows/deploy-install-script.yml`
+
+Required GitHub repository settings:
+
+- Secret: `CLOUDFLARE_API_TOKEN`
+- Secret: `CLOUDFLARE_ACCOUNT_ID`
+- Variable: `CF_PAGES_PROJECT_NAME`
+
 ## Quick Start
 
 ### Interactive mode
@@ -198,6 +232,13 @@ GitHub Actions workflow builds binaries for:
 - windows/arm64
 
 Artifacts are uploaded per platform by the workflow.
+
+## Release
+
+GitHub Release workflow file: `.github/workflows/release.yml`
+
+- Push tag `v*` (for example `v1.0.0`) to build all binaries and publish release assets.
+- You can also trigger the workflow manually with input `tag`.
 
 ## Troubleshooting
 
