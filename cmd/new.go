@@ -159,35 +159,35 @@ func runNewInteractive(templates []registry.Template) (registry.Template, string
 		return registry.Template{}, "", "", err
 	}
 
-	projectDescription, err := chooseProjectDescription(selected.Description)
+	selectedProjectDescription, err := chooseProjectDescription(selected.Description)
 	if err != nil {
 		return registry.Template{}, "", "", err
 	}
-	projectDescription = strings.TrimSpace(projectDescription)
-	if projectDescription == "" {
-		projectDescription = selected.Description
+	selectedProjectDescription = strings.TrimSpace(selectedProjectDescription)
+	if selectedProjectDescription == "" {
+		selectedProjectDescription = selected.Description
 	}
 
-	projectAuthor, err := chooseProjectAuthor()
-	if err != nil {
-		return registry.Template{}, "", "", err
-	}
-
-	projectVersion, err := chooseProjectVersion()
+	selectedProjectAuthor, err := chooseProjectAuthor()
 	if err != nil {
 		return registry.Template{}, "", "", err
 	}
 
-	packageManager, err := choosePackageManager()
+	selectedProjectVersion, err := chooseProjectVersion()
 	if err != nil {
 		return registry.Template{}, "", "", err
 	}
 
-	// 设置全局变量以便后续使用
-	projectDescription = projectDescription
-	projectAuthor = projectAuthor
-	projectVersion = projectVersion
-	packageManager = packageManager
+	selectedPackageManager, err := choosePackageManager()
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+
+	// Persist interactive answers for confirmation output and template placeholders.
+	projectDescription = selectedProjectDescription
+	projectAuthor = selectedProjectAuthor
+	projectVersion = selectedProjectVersion
+	packageManager = selectedPackageManager
 
 	return selected, version, projectName, nil
 }
