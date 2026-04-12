@@ -159,6 +159,36 @@ func runNewInteractive(templates []registry.Template) (registry.Template, string
 		return registry.Template{}, "", "", err
 	}
 
+	projectDescription, err := chooseProjectDescription(selected.Description)
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+	projectDescription = strings.TrimSpace(projectDescription)
+	if projectDescription == "" {
+		projectDescription = selected.Description
+	}
+
+	projectAuthor, err := chooseProjectAuthor()
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+
+	projectVersion, err := chooseProjectVersion()
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+
+	packageManager, err := choosePackageManager()
+	if err != nil {
+		return registry.Template{}, "", "", err
+	}
+
+	// 设置全局变量以便后续使用
+	projectDescription = projectDescription
+	projectAuthor = projectAuthor
+	projectVersion = projectVersion
+	packageManager = packageManager
+
 	return selected, version, projectName, nil
 }
 
@@ -219,7 +249,7 @@ func chooseTemplateTUI(templates []registry.Template) (registry.Template, error)
 
 func chooseTemplateVersion(defaultVersion string) (string, error) {
 	prompt := promptui.Prompt{
-		Label:   "Step 2/4: Template version",
+		Label:   "Step 2/7: Template version",
 		Default: defaultVersion,
 		Validate: func(input string) error {
 			if strings.TrimSpace(input) == "" {
@@ -244,7 +274,7 @@ func chooseProjectName(defaultName string) (string, error) {
 	}
 
 	prompt := promptui.Prompt{
-		Label:   "Step 3/4: Project name",
+		Label:   "Step 3/7: Project name",
 		Default: name,
 		Validate: func(input string) error {
 			input = strings.TrimSpace(input)
@@ -258,6 +288,89 @@ func chooseProjectName(defaultName string) (string, error) {
 	v, err := prompt.Run()
 	if err != nil {
 		return "", fmt.Errorf("project name input cancelled: %w", err)
+	}
+
+	return strings.TrimSpace(v), nil
+}
+
+func chooseProjectDescription(defaultDesc string) (string, error) {
+	desc := strings.TrimSpace(defaultDesc)
+	if desc == "" {
+		desc = ""
+	}
+
+	prompt := promptui.Prompt{
+		Label:   "Step 4/7: Project description",
+		Default: desc,
+		Validate: func(input string) error {
+			return nil // 允许为空
+		},
+	}
+
+	v, err := prompt.Run()
+	if err != nil {
+		return "", fmt.Errorf("project description input cancelled: %w", err)
+	}
+
+	return strings.TrimSpace(v), nil
+}
+
+func chooseProjectAuthor() (string, error) {
+	defaultAuthor := detectAuthor()
+
+	prompt := promptui.Prompt{
+		Label:   "Step 5/7: Project author",
+		Default: defaultAuthor,
+		Validate: func(input string) error {
+			input = strings.TrimSpace(input)
+			if input == "" {
+				return errors.New("project author cannot be empty")
+			}
+			return nil
+		},
+	}
+
+	v, err := prompt.Run()
+	if err != nil {
+		return "", fmt.Errorf("project author input cancelled: %w", err)
+	}
+
+	return strings.TrimSpace(v), nil
+}
+
+func chooseProjectVersion() (string, error) {
+	prompt := promptui.Prompt{
+		Label:   "Step 6/7: Project version",
+		Default: "0.1.0",
+		Validate: func(input string) error {
+			input = strings.TrimSpace(input)
+			if input == "" {
+				return errors.New("project version cannot be empty")
+			}
+			return nil
+		},
+	}
+
+	v, err := prompt.Run()
+	if err != nil {
+		return "", fmt.Errorf("project version input cancelled: %w", err)
+	}
+
+	return strings.TrimSpace(v), nil
+}
+
+func choosePackageManager() (string, error) {
+	prompt := promptui.Prompt{
+		Label:   "Step 7/7: Package manager",
+		Default: "",
+		Validate: func(input string) error {
+			return nil // 允许为空
+		},
+	}
+
+	v, err := prompt.Run()
+	if err != nil {
+		return "", fmt.Errorf("package manager input cancelled: %w", err)
 	}
 
 	return strings.TrimSpace(v), nil
@@ -356,10 +469,16 @@ func confirmCreation(t registry.Template, projectName, targetDir string) error {
 		return nil
 	}
 
-	fmt.Printf("\nStep 4/4: Confirm configuration\n")
+	fmt.Printf("\nStep 8/8: Confirm configuration\n")
 	fmt.Printf("  Template: %s\n", t.Name)
 	fmt.Printf("  Repository: %s\n", t.RepoURL)
 	fmt.Printf("  Project name: %s\n", projectName)
+	fmt.Printf("  Project description: %s\n", strings.TrimSpace(projectDescription))
+	fmt.Printf("  Project author: %s\n", strings.TrimSpace(projectAuthor))
+	fmt.Printf("  Project version: %s\n", strings.TrimSpace(projectVersion))
+	if strings.TrimSpace(packageManager) != "" {
+		fmt.Printf("  Package manager: %s\n", strings.TrimSpace(packageManager))
+	}
 	fmt.Printf("  Target directory: %s\n\n", targetDir)
 
 	confirm := promptui.Select{

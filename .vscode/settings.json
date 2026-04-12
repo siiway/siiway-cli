@@ -9,5 +9,6 @@
   },
   "go.formatTool": "gofmt",
   "go.lintTool": "golint",
-  "go.vetOnSave": "package"
+  "go.vetOnSave": "package",
+  "nixEnvSelector.nixFile": "${workspaceFolder}/flake.nix"
 }

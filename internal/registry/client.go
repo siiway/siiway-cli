@@ -116,14 +116,10 @@ type Template struct {
 	URL                   string                 `json:"url" yaml:"url"`
 	Branch                string                 `json:"branch" yaml:"branch"`
 	Path                  string                 `json:"path" yaml:"path"`
-	Replace               TemplateReplace        `json:"replace" yaml:"replace"`
 	ProjectNameRegexRules []ProjectNameRegexRule `json:"project_name_regex_rules" yaml:"project_name_regex_rules"`
 }
 
-// TemplateReplace defines shorthand replacement settings from templates.yaml.
-type TemplateReplace struct {
-	ProjectName string `json:"project_name" yaml:"project_name"`
-}
+
 
 // ProjectNameRegexRule defines one regex replacement applied to template files.
 type ProjectNameRegexRule struct {
@@ -660,14 +656,11 @@ func templateFromMap(m map[string]any, defaultName string) (Template, bool) {
 	}
 
 	return Template{
-		Name:        name,
-		Description: strings.TrimSpace(stringValue(m["description"])),
-		RepoURL:     repo,
-		Branch:      strings.TrimSpace(stringValue(m["branch"])),
-		Path:        strings.TrimSpace(stringValue(m["path"])),
-		Replace: TemplateReplace{
-			ProjectName: projectNameReplaceFromAny(m["replace"]),
-		},
+		Name:                  name,
+		Description:           strings.TrimSpace(stringValue(m["description"])),
+		RepoURL:               repo,
+		Branch:                strings.TrimSpace(stringValue(m["branch"])),
+		Path:                  strings.TrimSpace(stringValue(m["path"])),
 		ProjectNameRegexRules: normalizeProjectNameRegexRules(regexRulesFromAny(firstNonNil(
 			m["project_name_regex_rules"],
 			m["name_regex_rules"],
@@ -750,48 +743,9 @@ func normalizeProjectNameRegexRules(raw []ProjectNameRegexRule) []ProjectNameReg
 	return out
 }
 
-func projectNameReplaceFromAny(v any) string {
-	if v == nil {
-		return ""
-	}
 
-	switch t := v.(type) {
-	case map[string]any:
-		return strings.TrimSpace(stringValue(t["project_name"]))
-	case map[any]any:
-		converted := make(map[string]any, len(t))
-		for key, value := range t {
-			converted[fmt.Sprint(key)] = value
-		}
-		return projectNameReplaceFromAny(converted)
-	default:
-		return ""
-	}
-}
 
-func ruleFromProjectNameReplace(raw string) (ProjectNameRegexRule, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ProjectNameRegexRule{}, false
-	}
 
-	parts := strings.SplitN(raw, ":", 2)
-	if len(parts) != 2 {
-		return ProjectNameRegexRule{}, false
-	}
-
-	file := strings.Trim(strings.TrimSpace(parts[0]), "/")
-	pattern := strings.TrimSpace(parts[1])
-	if file == "" || pattern == "" {
-		return ProjectNameRegexRule{}, false
-	}
-
-	return ProjectNameRegexRule{
-		File:        file,
-		Pattern:     pattern,
-		Replacement: "{{project_name}}",
-	}, true
-}
 
 func stringValue(v any) string {
 	switch t := v.(type) {
@@ -827,11 +781,6 @@ func normalizeTemplates(raw []Template) []Template {
 		}
 
 		rules := normalizeProjectNameRegexRules(tpl.ProjectNameRegexRules)
-		if len(rules) == 0 {
-			if shorthandRule, ok := ruleFromProjectNameReplace(tpl.Replace.ProjectName); ok {
-				rules = []ProjectNameRegexRule{shorthandRule}
-			}
-		}
 
 		key := strings.ToLower(name + "|" + repo)
 		if _, ok := seen[key]; ok {
@@ -845,7 +794,6 @@ func normalizeTemplates(raw []Template) []Template {
 			RepoURL:               repo,
 			Branch:                branch,
 			Path:                  strings.TrimSpace(tpl.Path),
-			Replace:               tpl.Replace,
 			ProjectNameRegexRules: rules,
 		})
 	}
