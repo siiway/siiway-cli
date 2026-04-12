@@ -1,6 +1,6 @@
 # siiway-cli
 
-English | [中文](README.zh-CN.md)
+**English** | [中文](README.zh-CN.md)
 
 A lightweight CLI for scaffolding projects from remote template registries.
 
@@ -51,19 +51,19 @@ Output binaries are generated in `bin/` by default.
 Windows (PowerShell):
 
 ```powershell
-irm https://cli.siiway.org/get | iex
+irm https://sh.wss.moe/cli?shell=ps1 | iex
 ```
 
 Linux / macOS:
 
 ```bash
-curl -fsSL https://cli.siiway.org/get | sh
+curl -fsSL https://sh.wss.moe/cli?shell=sh | sh
 ```
 
 Pin a version:
 
 ```bash
-curl -fsSL https://cli.siiway.org/get | SIIWAY_VERSION=v1.0.0 sh
+curl -fsSL https://sh.wss.moe/cli | SIIWAY_VERSION=v1.0.0 sh
 ```
 
 The install script fetches binaries from GitHub Releases.

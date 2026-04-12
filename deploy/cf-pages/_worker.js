@@ -185,13 +185,13 @@ function renderHomePage() {
 <body>
   <main>
     <h1>siiway-cli install</h1>
-    <p>The <code>/get</code> endpoint auto-detects shell type from request headers.</p>
+    <p>The <code>/cli</code> endpoint auto-detects shell type from request headers.</p>
     <h2>Windows (PowerShell)</h2>
-    <pre><code>irm https://cli.siiway.org/get | iex</code></pre>
+    <pre><code>irm https://sh.wss.moe/cli?shell=ps1 | iex</code></pre>
     <h2>Linux / macOS</h2>
-    <pre><code>curl -fsSL https://cli.siiway.org/get | sh</code></pre>
+    <pre><code>curl -fsSL https://sh.wss.moe/cli?shell=sh | sh</code></pre>
     <h2>Pin version</h2>
-    <pre><code>curl -fsSL https://cli.siiway.org/get | SIIWAY_VERSION=v1.0.0 sh</code></pre>
+    <pre><code>curl -fsSL https://sh.wss.moe/cli | SIIWAY_VERSION=v1.0.0 sh</code></pre>
     <p>Installer downloads binaries from <a href="https://github.com/SiiWay/siiway-cli/releases">GitHub Releases</a>.</p>
   </main>
 </body>
@@ -202,26 +202,31 @@ export default {
   async fetch(request) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/get") {
-      const script = wantsPowerShell(request)
-        ? windowsInstallScript()
-        : unixInstallScript();
-      return new Response(script, {
-        headers: {
-          "content-type": "text/plain; charset=utf-8",
-          "cache-control": "no-store",
-        },
-      });
-    }
+    switch (url.pathname) {
+      case "/cli" || "/cli.sh" || "/cli.ps1":
+        const script = wantsPowerShell(request)
+          ? windowsInstallScript()
+          : unixInstallScript();
+        return new Response(script, {
+          headers: {
+            "content-type": "text/plain; charset=utf-8",
+            "cache-control": "no-store",
+          },
+        });
 
-    if (url.pathname === "/") {
-      return new Response(renderHomePage(), {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-        },
-      });
-    }
+      case "/cli.help" || "/help/cli" || "/cli.txt":
+        return new Response(renderHomePage(), {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
+        });
 
-    return new Response("Not Found", { status: 404 });
+      default: {
+        const upstreamUrl = new URL(request.url);
+        upstreamUrl.protocol = "https:";
+        upstreamUrl.host = "sh-wss-moe.pages.dev";
+        return fetch(new Request(upstreamUrl.toString(), request));
+      }
+    }
   },
 };

@@ -51,19 +51,19 @@ go build -o siiway .
 Windows（PowerShell）：
 
 ```powershell
-irm https://cli.siiway.org/get | iex
+irm https://sh.wss.moe/cli?shell=ps1 | iex
 ```
 
 Linux / macOS：
 
 ```bash
-curl -fsSL https://cli.siiway.org/get | sh
+curl -fsSL https://sh.wss.moe/cli?shell=sh | sh
 ```
 
 指定版本安装：
 
 ```bash
-curl -fsSL https://cli.siiway.org/get | SIIWAY_VERSION=v1.0.0 sh
+curl -fsSL https://sh.wss.moe/cli | SIIWAY_VERSION=v1.0.0 sh
 ```
 
 安装脚本会从 GitHub Releases 下载二进制文件。
