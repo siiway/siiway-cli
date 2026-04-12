@@ -11,7 +11,7 @@
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = import systems;
 
-      perSystem = { pkgs, ... }:
+      perSystem = { pkgs, system, ... }:
         let
           goToolchain = if pkgs ? go_1_26 then pkgs.go_1_26 else pkgs.go;
 

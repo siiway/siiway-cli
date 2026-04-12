@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    uses: ./.github/workflows/build-artifacts.yml
+    uses: ./.github/workflows/build-nix.yml
     secrets: inherit
 
   release:
