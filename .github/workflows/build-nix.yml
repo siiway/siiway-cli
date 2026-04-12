@@ -82,7 +82,13 @@ jobs:
           echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
           echo "git_commit=${GIT_COMMIT}" >> "$GITHUB_OUTPUT"
 
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
       - name: Build with Nix
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p bin
@@ -92,11 +98,16 @@ jobs:
             OUTPUT_NAME="${OUTPUT_NAME}.exe"
           fi
 
-          # Build with Nix using cross-compilation
-          nix build .#legacyPackages.${{ matrix.system }}.siiway-cli --print-build-logs
-
-          # Copy binary to bin directory with correct name
-          cp result/bin/siiway-cli "bin/${OUTPUT_NAME}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            # Windows builds are produced via Go cross-compilation.
+            CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+              -o "bin/${OUTPUT_NAME}" \
+              .
+          else
+            # Non-Windows targets are built from flake package outputs.
+            nix build .#packages.${{ matrix.system }}.siiway-cli --print-build-logs
+            cp result/bin/siiway-cli "bin/${OUTPUT_NAME}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
