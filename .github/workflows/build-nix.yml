@@ -99,13 +99,14 @@ jobs:
           fi
 
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            # Windows builds are produced via Go cross-compilation.
+            # Windows targets are produced via Go cross-compilation.
             CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
               -o "bin/${OUTPUT_NAME}" \
               .
           else
-            # Non-Windows targets are built from flake package outputs.
-            nix build .#packages.${{ matrix.system }}.siiway-cli --print-build-logs
+            # Non-Windows targets are cross-compiled by Nix on x86_64-linux.
+            TARGET_ATTR="siiway-cli-${{ matrix.goos }}-${{ matrix.goarch }}"
+            nix build ".#packages.x86_64-linux.${TARGET_ATTR}" --print-build-logs
             cp result/bin/siiway-cli "bin/${OUTPUT_NAME}"
           fi
 
